@@ -9,12 +9,17 @@ dataset = torchvision.datasets.MNIST(root="./mnist_raw", train=False, download=T
 full_label_set = {}
 
 for i in range(100):
-    rand_count = random.randint(1, 9)
+    rand_count = random.randint(1, 3)
     image_tensor = torch.zeros(28*3, 28*3, 3, dtype=torch.uint8)
     labels = []
+    pos = set()
     for j in range(rand_count):
         loc_x = random.randint(0, 2)
         loc_y = random.randint(0, 2)
+        while (loc_x, loc_y) in pos:
+            loc_x = random.randint(0, 2)
+            loc_y = random.randint(0, 2)
+        pos.add((loc_x, loc_y))
         color_idx = random.randint(0, 2)
         mnist_idx = random.randint(0, 9999)
         image = dataset.data[mnist_idx, :, :]
