@@ -129,7 +129,7 @@ class MultiConceptMNIST(VisionDataset):
             image_set = []
             label_set = []
             for n_obj in range(1, self.max_num_objects+1):
-                _image_set, _label_set = self.data_gen(self.num_samples // self.max_num_objects, n_obj, raw_test_ds)
+                _image_set, _label_set = self.data_gen(num_obj_samples, n_obj, raw_test_ds)
                 image_set += _image_set
                 label_set += _label_set
             torch.save(image_set, os.path.join(self.root, f"test-images-{self.num_samples}samples.pt"))

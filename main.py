@@ -9,6 +9,8 @@ import torch
 from tqdm import tqdm
 from matplotlib import pyplot as plt
 from model.nn_non_decomposed import MultiConceptNonDecomposed
+from itertools import chain
+
 
 def collate_fn(batch):
     imgs = torch.stack([x[0] for x in batch], dim=0)
@@ -59,7 +61,7 @@ def factorization(codebooks, input):
             guesses[i] = torchhd.multiset(codebooks[i])
 
         similarities = [None] * n
-        old_similarities = [None] * n
+        old_similarities = None
         for j in range(max_iters):
             estimates = torch.stack(guesses)
 
@@ -74,10 +76,12 @@ def factorization(codebooks, input):
                 similarities[i] = torchhd.dot_similarity(new_estimates[i], codebooks[i])
                 guesses[i] = torchhd.dot_similarity(similarities[i], codebooks[i].transpose(0,1)).sign().to(torch.int8)
 
-            if (old_similarities == similarities):
+            if (old_similarities is not None and all(chain.from_iterable((old_similarities[i] == similarities[i]).tolist() for i in range(n)))):
                 break
-
-            old_similarities = similarities
+            
+            # TODO reaches a metastable state where the guesses are flipping bits every iteration but not converging
+            # should be able to break out of the loop ealier
+            old_similarities = similarities.copy()
         
         print("Converged in {} iterations".format(j))
 
