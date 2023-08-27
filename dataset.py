@@ -73,10 +73,6 @@ class MultiConceptMNIST(VisionDataset):
                 self.labels = self._load_label(os.path.join(self.root, f"test-labels-{num_samples}samples.json"))
                 self.targets = self._load_data(os.path.join(self.root, f"test-targets-{num_samples}samples.pt"))
  
-    # @property
-    # def raw_folder(self) -> str:
-    #     return os.path.join(self.root, self.__class__.__name__, "raw")
-
     def _check_exists(self, train: bool) -> bool:
         if (train):
             return all(

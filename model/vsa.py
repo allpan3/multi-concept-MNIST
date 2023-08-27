@@ -4,6 +4,8 @@ import torchhd
 from torchhd.types import VSAOptions
 from torchhd import bind, bundle
 import itertools
+from torchvision.datasets import utils
+import os.path
 
 class MultiConceptMNISTVSA:
     # Dictionary of compositional vectors of the objects
@@ -12,6 +14,7 @@ class MultiConceptMNISTVSA:
 
     def __init__(
             self,
+            root: str,
             dim: int = 2048,
             vsa:VSAOptions = 'MAP',
             max_num_objects = 3,
@@ -20,24 +23,38 @@ class MultiConceptMNISTVSA:
             num_colors = 7
             ):
 
+        self.root = root
+        self.vsa = vsa
+
         # Default is float, we want to use int
         if vsa == 'MAP':
-            dtype = torch.int8
+            self.dtype = torch.int8
         else:
-            dype = None
+            self.dype = None
 
         self.dim = dim
         self.num_pos_x = num_pos_x
         self.num_pos_y = num_pos_y
         self.num_colors = num_colors
-        
-        self.pos_x = torchhd.random(num_pos_x, dim, vsa=vsa, dtype=dtype)
-        self.pos_y = torchhd.random(num_pos_y, dim, vsa=vsa, dtype=dtype)
-        self.color = torchhd.random(num_colors, dim, vsa=vsa, dtype=dtype)
-        self.digit = torchhd.random(10, dim, vsa=vsa, dtype=dtype)
+
+        if self._check_exists():
+            self.pos_x, self.pos_y, self.color, self.digit = torch.load(os.path.join(self.root, f"items.pt"))
+        else:
+            self.gen_items()
 
         self.gen_dict()
     
+
+    def gen_items(self):
+        self.pos_x = torchhd.random(self.num_pos_x, self.dim, vsa=self.vsa, dtype=self.dtype)
+        self.pos_y = torchhd.random(self.num_pos_y, self.dim, vsa=self.vsa, dtype=self.dtype)
+        self.color = torchhd.random(self.num_colors, self.dim, vsa=self.vsa, dtype=self.dtype)
+        self.digit = torchhd.random(10, self.dim, vsa=self.vsa, dtype=self.dtype)
+        items = [self.pos_x, self.pos_y, self.color, self.digit]
+        os.makedirs(self.root, exist_ok=True)
+        torch.save(items, os.path.join(self.root, f"items.pt"))
+
+
     def gen_dict(self):
         '''
         Generate dictionary of all possible combinations of a single object
@@ -59,4 +76,9 @@ class MultiConceptMNISTVSA:
             while i < len(key):
                 obj = bundle(obj, self.dict[tuple(key[i])])
                 i += 1
-            return obj 
+            return obj
+        
+    def _check_exists(self) -> bool:
+        return utils.check_integrity(os.path.join(self.root, "items.pt"))
+
+# %%

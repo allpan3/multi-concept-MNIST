@@ -1,4 +1,5 @@
 
+DIM = 2000
 
 NUM_POS_X = 3
 NUM_POS_Y = 3
