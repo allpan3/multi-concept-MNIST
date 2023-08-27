@@ -1,3 +1,6 @@
+""" Multi-Concept MNIST Dataset
+"""
+
 # %%
 from torchvision import transforms
 from torchvision.datasets import MNIST, utils
@@ -23,12 +26,16 @@ class MultiConceptMNIST(VisionDataset):
         range(1,3)    # cyan
     ]
 
+    data = []
+    labels = []
+    targets = []
+
     def __init__(
         self,
         root: str,
         vsa: MultiConceptMNISTVSA,
-        num_train_samples: int,
-        num_test_samples: int,
+        train: bool,      # training set or test set
+        num_samples: int,
         force_gen: bool = False,  # generate dataset even if it exists
         max_num_objects: int = 3,
         num_pos_x: int = 3,
@@ -39,11 +46,9 @@ class MultiConceptMNIST(VisionDataset):
     ) -> None:
         super().__init__(root, transform=transform, target_transform=target_transform)
 
-        assert num_train_samples % max_num_objects == 0, "Samples evenly distriubted among object counts, so num_train_samples must be divisible by max_num_objects"
-        assert num_test_samples % max_num_objects == 0, "Samples evenly distriubted among object counts, so num_test_samples must be divisible by max_num_objects"
+        assert num_samples % max_num_objects == 0, "Samples evenly distriubted among object counts, so num_samples must be divisible by max_num_objects"
 
-        self.num_train_samples = num_train_samples
-        self.num_test_samples = num_test_samples
+        self.num_samples = num_samples
         assert(vsa.num_pos_x == num_pos_x)
         assert(vsa.num_pos_y == num_pos_y)
         assert(vsa.num_colors == num_colors)
@@ -55,28 +60,41 @@ class MultiConceptMNIST(VisionDataset):
         self.max_num_objects = max_num_objects
 
         # Generate dataset if not exists
-        if force_gen:
-            self.dataset_gen(gen_train=True, gen_test=True)
+        if force_gen or not self._check_exists(train):
+            self.dataset_gen(train)
         else:
-            gen_train = True if not self._check_exists("train") else False
-            gen_test = True if not self._check_exists("test") else False
-            self.dataset_gen(gen_train=gen_train, gen_test=gen_test)
+            if train:
+                for i in range(1, self.max_num_objects+1):
+                    self.data += self._load_data(os.path.join(self.root, f"train-images-{i}obj-{num_samples//max_num_objects}samples.pt"))
+                    self.labels += self._load_label(os.path.join(self.root, f"train-labels-{i}obj-{num_samples//max_num_objects}samples.json"))
+                    self.targets += self._load_data(os.path.join(self.root, f"train-targets-{i}obj-{num_samples//max_num_objects}samples.pt"))
+            else:
+                self.data = self._load_data(os.path.join(self.root, f"test-images-{num_samples}samples.pt"))
+                self.labels = self._load_label(os.path.join(self.root, f"test-labels-{num_samples}samples.json"))
+                self.targets = self._load_data(os.path.join(self.root, f"test-targets-{num_samples}samples.pt"))
+ 
+    # @property
+    # def raw_folder(self) -> str:
+    #     return os.path.join(self.root, self.__class__.__name__, "raw")
 
-    @property
-    def raw_folder(self) -> str:
-        return os.path.join(self.root, self.__class__.__name__, "raw")
+    def _check_exists(self, train: bool) -> bool:
+        if (train):
+            return all(
+                utils.check_integrity(os.path.join(self.root, file))
+                for file in [f"train-images-{n}obj-{self.num_samples//self.max_num_objects}samples.pt" for n in range(1, self.max_num_objects+1)]
+            )
+        else:
+            return all(
+                utils.check_integrity(os.path.join(self.root, file))
+                for file in [f"test-images-{self.num_samples}samples.pt"]
+            )
 
-    def _check_exists(self, type) -> bool:
-        if (type == "train"):
-            return all(
-                utils.check_integrity(os.path.join(self.raw_folder, file))
-                for file in [f"train-images-{n}obj-{self.num_train_samples//self.max_num_objects}samples.pt" for n in range(1, self.max_num_objects+1)]
-            )
-        elif (type == "test"):
-            return all(
-                utils.check_integrity(os.path.join(self.raw_folder, file))
-                for file in [f"test-images-{self.num_test_samples}samples.pt"]
-            )
+    def _load_label(self, path: str):
+        with open(path, "r") as path:
+            return json.load(path)
+
+    def _load_data(self, path: str):
+        return torch.load(path)
 
     def __getitem__(self, index: int) -> Tuple[Any, Any]:
         '''
@@ -86,35 +104,47 @@ class MultiConceptMNIST(VisionDataset):
         Returns:
             tuple: (image, target) where target is key of the target class.
         '''
+        return self.data[index], self.labels[index], self.targets[index]
 
-    def dataset_gen(self, gen_train: bool = True, gen_test: bool = True):
+    def __len__(self) -> int:
+        return len(self.data)
+
+    def dataset_gen(self, train: bool):
         assert(self.num_colors <= len(self.COLOR_SET))
 
-        if gen_train:
-            os.makedirs(self.root, exist_ok=True)
-            raw_train_ds = MNIST(root=os.path.join(self.root, ".."), train=True, download=True)
-            num_samples = self.num_train_samples // self.max_num_objects
-            for n_obj in range(1, self.max_num_objects+1):
-                image_set, label_set = self.data_gen(num_samples, n_obj, raw_train_ds)
-                torch.save(image_set, os.path.join(self.root, f"train-images-{n_obj}obj-{num_samples}samples.pt"))
-                with open(os.path.join(self.root, f"train-labels-{n_obj}obj-{num_samples}samples.json"), "w") as f:
-                    json.dump(label_set, f)
-                torch.save(self.target_gen(label_set), os.path.join(self.root, f"train-targets-{n_obj}obj-{num_samples}samples.pt"))
+        num_obj_samples = self.num_samples // self.max_num_objects
+        os.makedirs(self.root, exist_ok=True)
 
-        if gen_test:
-            os.makedirs(self.root, exist_ok=True)
+        if train:
+            raw_train_ds = MNIST(root=os.path.join(self.root, ".."), train=True, download=True)
+            for n_obj in range(1, self.max_num_objects+1):
+                image_set, label_set = self.data_gen(num_obj_samples, n_obj, raw_train_ds)
+                torch.save(image_set, os.path.join(self.root, f"train-images-{n_obj}obj-{num_obj_samples}samples.pt"))
+                with open(os.path.join(self.root, f"train-labels-{n_obj}obj-{num_obj_samples}samples.json"), "w") as f:
+                    json.dump(label_set, f)
+                target_set = self.target_gen(label_set)
+                torch.save(target_set, os.path.join(self.root, f"train-targets-{n_obj}obj-{num_obj_samples}samples.pt"))
+                self.data += image_set
+                self.labels += label_set
+                self.targets += target_set
+        else:
             # I assume training and testing set are mutually exclusive
             raw_test_ds = MNIST(root=os.path.join(self.root, ".."), train=False, download=True)
             image_set = []
             label_set = []
             for n_obj in range(1, self.max_num_objects+1):
-                _image_set, _label_set = self.data_gen(self.num_test_samples // self.max_num_objects, n_obj, raw_test_ds)
+                _image_set, _label_set = self.data_gen(self.num_samples // self.max_num_objects, n_obj, raw_test_ds)
                 image_set += _image_set
                 label_set += _label_set
-            torch.save(image_set, os.path.join(self.root, f"test-images-{self.num_test_samples}samples.pt"))
-            with open(os.path.join(self.root, f"test-labels-{self.num_test_samples}samples.json"), "w") as f:
+            torch.save(image_set, os.path.join(self.root, f"test-images-{self.num_samples}samples.pt"))
+            with open(os.path.join(self.root, f"test-labels-{self.num_samples}samples.json"), "w") as f:
                 json.dump(label_set, f)
-            torch.save(self.target_gen(label_set), os.path.join(self.root, f"test-targets-{self.num_test_samples}samples.pt"))
+            target_set = self.target_gen(label_set)
+            torch.save(target_set, os.path.join(self.root, f"test-targets-{self.num_samples}samples.pt"))
+            self.data = image_set
+            self.labels = label_set
+            self.targets = target_set
+
 
     def data_gen(self, num_samples, num_objs, raw_ds: MNIST) -> [list, list]:
         image_set = []
@@ -123,7 +153,8 @@ class MultiConceptMNIST(VisionDataset):
 
         for i in range(num_samples):
             # num_pos_x by num_pos_y grid, each grid 28x28 pixels, color (3-dim uint8 tuple)
-            image_tensor = torch.zeros(28*self.num_pos_x, 28*self.num_pos_y, 3, dtype=torch.uint8)
+            # [H, W, C]
+            image_tensor = torch.zeros(28*self.num_pos_y, 28*self.num_pos_x, 3, dtype=torch.uint8)
             label = []
             label_uni = [] # Check the coverage of generation
             # one object max per position
@@ -139,7 +170,7 @@ class MultiConceptMNIST(VisionDataset):
                 mnist_idx = random.randint(0, 9999) # 10k images in MNIST test set
                 digit_image = raw_ds.data[mnist_idx, :, :]
                 for k in self.COLOR_SET[color_idx]:
-                    image_tensor[pos_x*28:(pos_x+1)*28, pos_y*28:(pos_y+1)*28, k] = digit_image
+                    image_tensor[pos_y*28:(pos_y+1)*28, pos_x*28:(pos_x+1)*28, k] = digit_image
                 
                 object = {
                     "pos_x": pos_x, 
