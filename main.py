@@ -22,7 +22,7 @@ def collate_fn(batch):
 def get_train_test_dls():
     vsa = MultiConceptMNISTVSA("./data/multi-concept-MNIST", dim=DIM, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y)
     train_ds = MultiConceptMNIST("./data/multi-concept-MNIST", vsa, train=True, num_samples=9000, max_num_objects=3, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
-    test_ds = MultiConceptMNIST("./data/multi-concept-MNIST", vsa, train=False, num_samples=3, max_num_objects=3, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
+    test_ds = MultiConceptMNIST("./data/multi-concept-MNIST", vsa, train=False, num_samples=300, max_num_objects=3, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
     train_ld = DataLoader(train_ds, batch_size=20, shuffle=True, collate_fn=collate_fn)
     test_ld = DataLoader(test_ds, batch_size=1, shuffle=False, collate_fn=collate_fn)
     return train_ld, test_ld, vsa
@@ -49,12 +49,12 @@ def train(dataloader, model, loss_fn, optimizer):
         print(loss)
 
 
-def factorization(codebooks, input):
+def factorization(codebooks, input) -> list:
     max_iters = 1000
 
     n = len(codebooks)
     guesses = [None] * n
-    results = []
+    result_set = []
     # 3 objects max, so we need to run 3 times
     for k in range(3):
         for i in range(n):
@@ -92,7 +92,7 @@ def factorization(codebooks, input):
             'digit': torch.argmax(similarities[3]).item()
         }
 
-        results.append(result)
+        result_set.append(result)
 
         output = []
         for i in range(n):
@@ -103,24 +103,34 @@ def factorization(codebooks, input):
         # Subtract the object from the inference result
         input = input - object
 
-    print("Factorization Result: ", results)
+    return result_set
 
 if __name__ == "__main__":
     train_dl, test_dl, vsa= get_train_test_dls()
-    # model, loss_fn, optimizer = get_model_loss_optimizer()
+    model, loss_fn, optimizer = get_model_loss_optimizer()
     # train(train_dl, model, loss_fn, optimizer)
 
+
+    # Inference
     # images in tensor([B, H, W, C])
-    # labels in [{'pos_x': tensor, pos_y: tensor, color: tensor, digit: tensor}, ...]
+    # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
     # targets in VSATensor([B, D])
     for images, labels, targets in tqdm(test_dl, desc="Test"):
         plt.figure()
         plt.imshow(images[0])
-        print(labels)
         print()
-        # plt.show()
+
+        # TODO Add inference step
 
         # Factorization
         codebooks = [vsa.pos_x, vsa.pos_y, vsa.color, vsa.digit]
-        factorization(codebooks, targets[0])
+        # TODO Swap targets[0] with inference result
+        result = factorization(codebooks, targets[0])
+
+        for label in labels[0]:
+            # For n objects, only check the first n results
+            if (label in result[0: len(labels[0])+1]):
+                print("Object {}".format(label), "is correctly detected.")
+            else:
+                print("Object {}".format(label), "is not detected.")
         
