@@ -10,6 +10,7 @@ from tqdm import tqdm
 from matplotlib import pyplot as plt
 from model.nn_non_decomposed import MultiConceptNonDecomposed
 from itertools import chain
+from colorama import Fore
 
 
 def collate_fn(batch):
@@ -20,9 +21,10 @@ def collate_fn(batch):
 
 
 def get_train_test_dls():
-    vsa = MultiConceptMNISTVSA("./data/multi-concept-MNIST", dim=DIM, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y)
-    train_ds = MultiConceptMNIST("./data/multi-concept-MNIST", vsa, train=True, num_samples=9000, max_num_objects=3, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
-    test_ds = MultiConceptMNIST("./data/multi-concept-MNIST", vsa, train=False, num_samples=300, max_num_objects=3, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
+    data_dir = f"./data/multi-concept-MNIST/{DIM}dim-{NUM_POS_X}x{NUM_POS_Y}y-{NUM_COLOR}color"
+    vsa = MultiConceptMNISTVSA(data_dir, dim=DIM, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y)
+    train_ds = MultiConceptMNIST(data_dir, vsa, train=True, num_samples=9000, max_num_objects=3, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
+    test_ds = MultiConceptMNIST(data_dir, vsa, train=False, num_samples=30, max_num_objects=3, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
     train_ld = DataLoader(train_ds, batch_size=20, shuffle=True, collate_fn=collate_fn)
     test_ld = DataLoader(test_ds, batch_size=1, shuffle=False, collate_fn=collate_fn)
     return train_ld, test_ld, vsa
@@ -116,9 +118,9 @@ if __name__ == "__main__":
     # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
     # targets in VSATensor([B, D])
     for images, labels, targets in tqdm(test_dl, desc="Test"):
-        plt.figure()
-        plt.imshow(images[0])
-        print()
+        # plt.figure()
+        # plt.imshow(images[0])
+        # print()
 
         # TODO Add inference step
 
@@ -132,5 +134,5 @@ if __name__ == "__main__":
             if (label in result[0: len(labels[0])+1]):
                 print("Object {}".format(label), "is correctly detected.")
             else:
-                print("Object {}".format(label), "is not detected.")
+                print(Fore.RED + "Object {}".format(label), "is not detected." + Fore.RESET)
         
