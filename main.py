@@ -34,6 +34,8 @@ def get_model_loss_optimizer():
     model = MultiConceptNonDecomposed(dim=DIM)
     loss_fn = torch.nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    if torch.cuda.is_available():
+        model = model.cuda()
     return model, loss_fn, optimizer
 
 def train(dataloader, model, loss_fn, optimizer, num_epoch=3):
@@ -41,10 +43,12 @@ def train(dataloader, model, loss_fn, optimizer, num_epoch=3):
     # images in tensor([B, H, W, C])
     # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
     # targets in VSATensor([B, D])
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     for epoch in range(num_epoch):
         for idx, (images, _, targets) in enumerate(tqdm(dataloader, desc="train")):
+            images = images.to(device)
             images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
-            targets_float = targets.type(torch.float32)
+            targets_float = targets.type(torch.float32).to(device)
             output = model(images_nchw)
             loss = loss_fn(output, targets_float)
             optimizer.zero_grad()
