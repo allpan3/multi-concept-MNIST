@@ -1,8 +1,7 @@
 # %%
 import torch
-import torchhd
 from torchhd.types import VSAOptions
-from torchhd import bind, bundle
+from torchhd import bind, bundle, random, empty
 import itertools
 from torchvision.datasets import utils
 import os.path
@@ -46,10 +45,10 @@ class MultiConceptMNISTVSA:
     
 
     def gen_items(self):
-        self.pos_x = torchhd.random(self.num_pos_x, self.dim, vsa=self.vsa, dtype=self.dtype)
-        self.pos_y = torchhd.random(self.num_pos_y, self.dim, vsa=self.vsa, dtype=self.dtype)
-        self.color = torchhd.random(self.num_colors, self.dim, vsa=self.vsa, dtype=self.dtype)
-        self.digit = torchhd.random(10, self.dim, vsa=self.vsa, dtype=self.dtype)
+        self.pos_x = random(self.num_pos_x, self.dim, vsa=self.vsa, dtype=self.dtype)
+        self.pos_y = random(self.num_pos_y, self.dim, vsa=self.vsa, dtype=self.dtype)
+        self.color = random(self.num_colors, self.dim, vsa=self.vsa, dtype=self.dtype)
+        self.digit = random(10, self.dim, vsa=self.vsa, dtype=self.dtype)
         items = [self.pos_x, self.pos_y, self.color, self.digit]
         os.makedirs(self.root, exist_ok=True)
         torch.save(items, os.path.join(self.root, f"items.pt"))
@@ -66,7 +65,7 @@ class MultiConceptMNISTVSA:
 
     def __getitem__(self, key: list):
         '''
-        `key` is a list of tuples of (pos_x, pos_y, color, digit). The number of tuples represents the number of objects
+        `key` is a list of tuples in [(pos_x, pos_y, color, digit), ...] format. The number of tuples represents the number of objects
         '''
         if (len(key) == 1):
             return self.dict[tuple(key[0])]
@@ -77,6 +76,15 @@ class MultiConceptMNISTVSA:
                 obj = bundle(obj, self.dict[tuple(key[i])])
                 i += 1
             return obj
+    
+    def lookup(self, label: list):
+        '''
+        `label` is a list of dict in [{'pos_x': int, 'pos_y': int, 'color': int, 'digit': int}, ...] format
+        '''
+        key = []
+        for i in range(len(label)):
+            key.append((label[i]["pos_x"], label[i]["pos_y"], label[i]["color"], label[i]["digit"]))
+        return self.__getitem__(key)
         
     def _check_exists(self) -> bool:
         return utils.check_integrity(os.path.join(self.root, "items.pt"))

@@ -4,7 +4,7 @@ from const import *
 from model.vsa import MultiConceptMNISTVSA
 from dataset import MultiConceptMNIST
 from torch.utils.data import DataLoader
-import torchhd
+import torchhd as hd
 import torch
 from tqdm import tqdm
 from matplotlib import pyplot as plt
@@ -23,8 +23,8 @@ def collate_fn(batch):
 def get_train_test_dls():
     data_dir = f"./data/multi-concept-MNIST/{DIM}dim-{NUM_POS_X}x{NUM_POS_Y}y-{NUM_COLOR}color"
     vsa = MultiConceptMNISTVSA(data_dir, dim=DIM, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y)
-    train_ds = MultiConceptMNIST(data_dir, vsa, train=True, num_samples=9000, max_num_objects=3, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
-    test_ds = MultiConceptMNIST(data_dir, vsa, train=False, num_samples=30, max_num_objects=3, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
+    train_ds = MultiConceptMNIST(data_dir, vsa, train=True, num_samples=9000, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
+    test_ds = MultiConceptMNIST(data_dir, vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
     train_ld = DataLoader(train_ds, batch_size=20, shuffle=True, collate_fn=collate_fn)
     test_ld = DataLoader(test_ds, batch_size=1, shuffle=False, collate_fn=collate_fn)
     return train_ld, test_ld, vsa
@@ -52,87 +52,127 @@ def train(dataloader, model, loss_fn, optimizer):
 
 
 def factorization(codebooks, input) -> list:
-    max_iters = 1000
+    max_iters = 50
 
     n = len(codebooks)
     guesses = [None] * n
     result_set = []
+    convergence = []
     # 3 objects max, so we need to run 3 times
-    for k in range(3):
+    for k in range(MAX_NUM_OBJECTS):
         for i in range(n):
-            guesses[i] = torchhd.multiset(codebooks[i])
+            # guesses[i] = hd.multiset(codebooks[i])
+            # guesses[i] = hd.multiset(codebooks[i]).sign()
+            guesses[i] = hd.hard_quantize(hd.multiset(codebooks[i]))
 
         similarities = [None] * n
         old_similarities = None
         for j in range(max_iters):
             estimates = torch.stack(guesses)
+            
+            inv_estimates = estimates.inverse()
 
             rolled = []
             for i in range(1, n):
-                rolled.append(estimates.roll(i, dims=0))
+                rolled.append(inv_estimates.roll(i, dims=0))
 
             inv_estimates = torch.stack(rolled, dim=1)
-            others = torchhd.multibind(inv_estimates)
-            new_estimates = torchhd.bind(input, others)
+            others = hd.multibind(inv_estimates)
+            # new_estimates = hd.bind(input.sign(), others)
+            new_estimates = hd.bind(hd.hard_quantize(input), others)
+            # new_estimates = hd.bind(input, others)
             for i in range(0, n):
-                similarities[i] = torchhd.dot_similarity(new_estimates[i], codebooks[i])
-                guesses[i] = torchhd.dot_similarity(similarities[i], codebooks[i].transpose(0,1)).sign().to(torch.int8)
+                similarities[i] = hd.dot_similarity(new_estimates[i], codebooks[i])
+                similarities[i] = torch.abs(similarities[i])
+                guesses[i] = hd.dot_similarity(similarities[i], codebooks[i].transpose(0,1)).sign()
+                # guesses[i] = hd.dot_similarity(similarities[i], codebooks[i].transpose(0,1))
+                # guesses[i][guesses[i] > DIM] = DIM
+                # guesses[i][guesses[i] < -DIM] = -DIM
 
             if (old_similarities is not None and all(chain.from_iterable((old_similarities[i] == similarities[i]).tolist() for i in range(n)))):
                 break
             
-            # TODO reaches a metastable state where the guesses are flipping bits every iteration but not converging
+            # TODO sometimes the network reaches a metastable state where the guesses are flipping bits every iteration but not converging
             # should be able to break out of the loop ealier
             old_similarities = similarities.copy()
+            # old_estimates = new_estimates
         
-        print("Converged in {} iterations".format(j))
+        convergence.append(j)
+
+        idx = [None] * n
+        output = []
+        for i in range(n):
+            # idx[i] = torch.argmax(torch.abs(similarities[i])).item()
+            idx[i] = torch.argmax(similarities[i]).item()
+            output.append(codebooks[i][idx[i]])
+        output = torch.stack(output).squeeze()
+
+        # Subtract the object from the inference result
+        object = hd.multibind(output)
+        input = input - object
 
         result = {
-            'pos_x': torch.argmax(similarities[0]).item(),
-            'pos_y': torch.argmax(similarities[1]).item(),
-            'color': torch.argmax(similarities[2]).item(),
-            'digit': torch.argmax(similarities[3]).item()
+            'pos_x': idx[0],
+            'pos_y': idx[1],
+            'color': idx[2],
+            'digit': idx[3]
         }
 
         result_set.append(result)
 
-        output = []
-        for i in range(n):
-            output.append(torchhd.cleanup(guesses[i], codebooks[i], -DIM))
-        output = torch.stack(output).squeeze()
-        object = torchhd.multibind(output)
-
-        # Subtract the object from the inference result
-        input = input - object
-
-    return result_set
+    return result_set, convergence
 
 if __name__ == "__main__":
     train_dl, test_dl, vsa= get_train_test_dls()
     model, loss_fn, optimizer = get_model_loss_optimizer()
     # train(train_dl, model, loss_fn, optimizer)
 
-
     # Inference
     # images in tensor([B, H, W, C])
     # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
     # targets in VSATensor([B, D])
+
+    incorrect_count = [0] * MAX_NUM_OBJECTS
+    codebooks = [vsa.pos_x, vsa.pos_y, vsa.color, vsa.digit]
+
+    n = 0
     for images, labels, targets in tqdm(test_dl, desc="Test"):
+        print(Fore.BLUE + "Test {}".format(n) + Fore.RESET)
         # plt.figure()
         # plt.imshow(images[0])
+        # plt.show()
         # print()
 
         # TODO Add inference step
 
+        infer_result = hd.random(1, dimensions=DIM)  # TODO replace with inference result
+        
+        print("Similiarty(inference, target) = {}".format(hd.dot_similarity(infer_result, targets[0]).item()))
+        
         # Factorization
-        codebooks = [vsa.pos_x, vsa.pos_y, vsa.color, vsa.digit]
         # TODO Swap targets[0] with inference result
-        result = factorization(codebooks, targets[0])
+        result, convergence = factorization(codebooks, targets[0])
 
+        # Compare result
+        incorrect = False
+        message = ""
         for label in labels[0]:
             # For n objects, only check the first n results
-            if (label in result[0: len(labels[0])+1]):
-                print("Object {}".format(label), "is correctly detected.")
+            if (label not in result[0: len(labels[0])+1]):
+                message += Fore.RED + "Object {} is not detected.".format(label) + Fore.RESET + "\n"
+                incorrect = True
             else:
-                print(Fore.RED + "Object {}".format(label), "is not detected." + Fore.RESET)
-        
+                message += "Object {} is correctly detected.".format(label) + "\n"
+
+        if incorrect:
+            print(f"Test {n} Failed")
+            print("Convergence: {}".format(convergence))
+            print(message)
+            incorrect_count[len(labels[0])-1] += 1 if incorrect else 0
+
+        n += 1
+    
+    for i in range(MAX_NUM_OBJECTS):
+        print("Incorrect count for {} objects: {}".format(i+1, incorrect_count[i]) + "/ {}".format(NUM_TEST_SAMPLES//3))
+
+       
