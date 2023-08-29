@@ -11,7 +11,7 @@ from matplotlib import pyplot as plt
 from model.nn_non_decomposed import MultiConceptNonDecomposed
 from itertools import chain
 from colorama import Fore
-
+from torch.utils.tensorboard import SummaryWriter
 
 def collate_fn(batch):
     imgs = torch.stack([x[0] for x in batch], dim=0)
@@ -33,22 +33,25 @@ def get_train_test_dls():
 def get_model_loss_optimizer():
     model = MultiConceptNonDecomposed(dim=DIM)
     loss_fn = torch.nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
     return model, loss_fn, optimizer
 
-def train(dataloader, model, loss_fn, optimizer):
+def train(dataloader, model, loss_fn, optimizer, num_epoch=3):
+    writer = SummaryWriter()
     # images in tensor([B, H, W, C])
     # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
     # targets in VSATensor([B, D])
-    for images, _, targets in tqdm(dataloader, desc="train"):
-        images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
-        targets_float = targets.type(torch.float32)
-        output = model(images_nchw)
-        loss = loss_fn(output, targets_float)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        print(loss)
+    for epoch in range(num_epoch):
+        for idx, (images, _, targets) in enumerate(tqdm(dataloader, desc="train")):
+            images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
+            targets_float = targets.type(torch.float32)
+            output = model(images_nchw)
+            loss = loss_fn(output, targets_float)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            print(loss)
+            writer.add_scalar('Loss/train', loss, epoch * len(dataloader) + idx)
 
 
 def factorization(codebooks, input) -> list:
@@ -125,7 +128,8 @@ def factorization(codebooks, input) -> list:
 if __name__ == "__main__":
     train_dl, test_dl, vsa= get_train_test_dls()
     model, loss_fn, optimizer = get_model_loss_optimizer()
-    # train(train_dl, model, loss_fn, optimizer)
+    train(train_dl, model, loss_fn, optimizer)
+    exit()
 
     # Inference
     # images in tensor([B, H, W, C])
