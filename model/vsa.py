@@ -45,6 +45,8 @@ class MultiConceptMNISTVSA:
     
 
     def gen_items(self):
+        # fix random seed to ensure reproducibility
+        torch.manual_seed(0)
         self.pos_x = random(self.num_pos_x, self.dim, vsa=self.vsa, dtype=self.dtype)
         self.pos_y = random(self.num_pos_y, self.dim, vsa=self.vsa, dtype=self.dtype)
         self.color = random(self.num_colors, self.dim, vsa=self.vsa, dtype=self.dtype)
