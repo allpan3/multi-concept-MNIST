@@ -127,4 +127,4 @@ class ResNet(nn.Module):
 
 
 def get_resnet18_model(dim):
-    return ResNet(BasicBlock, [2,2,2,2,], num_classes=dim)
+    return ResNet(Bottleneck, [2,2,2,2,], num_classes=dim)
