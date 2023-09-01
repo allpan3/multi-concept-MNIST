@@ -8,8 +8,6 @@ from .vsa import VSA
 # %%
 class Resonator(nn.Module):
 
-    init_estimates: hd.VSATensor
-
     def __init__(self, vsa:VSA, type="CONCURRENT", norm=False, activation='NONE', iterations=100, device="cpu"):
         super(Resonator, self).__init__()
         self.to(device)

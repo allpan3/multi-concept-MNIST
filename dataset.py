@@ -26,10 +26,6 @@ class MultiConceptMNIST(VisionDataset):
         range(1,3)    # cyan
     ]
 
-    data = []
-    labels = []
-    targets = []
-
     def __init__(
         self,
         root: str,
@@ -59,31 +55,25 @@ class MultiConceptMNIST(VisionDataset):
         assert(max_num_objects <= num_pos_x * num_pos_y)
         self.max_num_objects = max_num_objects
 
+        self.data = []
+        self.labels = []
+        self.targets = []
+
+        type = "train" if train else "test"
         # Generate dataset if not exists
-        if force_gen or not self._check_exists(train):
+        if force_gen or not self._check_exists(type):
             self.dataset_gen(train)
         else:
-            if train:
-                for i in range(1, self.max_num_objects+1):
-                    self.data += self._load_data(os.path.join(self.root, f"train-images-{i}obj-{num_samples//max_num_objects}samples.pt"))
-                    self.labels += self._load_label(os.path.join(self.root, f"train-labels-{i}obj-{num_samples//max_num_objects}samples.json"))
-                    self.targets += self._load_data(os.path.join(self.root, f"train-targets-{i}obj-{num_samples//max_num_objects}samples.pt"))
-            else:
-                self.data = self._load_data(os.path.join(self.root, f"test-images-{num_samples}samples.pt"))
-                self.labels = self._load_label(os.path.join(self.root, f"test-labels-{num_samples}samples.json"))
-                self.targets = self._load_data(os.path.join(self.root, f"test-targets-{num_samples}samples.pt"))
+            for i in range(1, self.max_num_objects+1):
+                self.data += self._load_data(os.path.join(self.root, f"{type}-images-{i}obj-{num_samples//max_num_objects}samples.pt"))
+                self.labels += self._load_label(os.path.join(self.root, f"{type}-labels-{i}obj-{num_samples//max_num_objects}samples.json"))
+                self.targets += self._load_data(os.path.join(self.root, f"{type}-targets-{i}obj-{num_samples//max_num_objects}samples.pt"))
  
-    def _check_exists(self, train: bool) -> bool:
-        if (train):
-            return all(
-                os.path.exists(os.path.join(self.root, file))
-                for file in [f"train-images-{n}obj-{self.num_samples//self.max_num_objects}samples.pt" for n in range(1, self.max_num_objects+1)]
-            )
-        else:
-            return all(
-                os.path.exists(os.path.join(self.root, file))
-                for file in [f"test-images-{self.num_samples}samples.pt"]
-            )
+    def _check_exists(self, type: str) -> bool:
+        return all(
+            os.path.exists(os.path.join(self.root, file))
+            for file in [f"{type}-images-{n}obj-{self.num_samples//self.max_num_objects}samples.pt" for n in range(1, self.max_num_objects+1)]
+        )
 
     def _load_label(self, path: str):
         with open(path, "r") as path:
@@ -105,35 +95,23 @@ class MultiConceptMNIST(VisionDataset):
         os.makedirs(self.root, exist_ok=True)
 
         if train:
-            raw_train_ds = MNIST(root=os.path.join(self.root, ".."), train=True, download=True)
-            for n_obj in range(1, self.max_num_objects+1):
-                image_set, label_set = self.data_gen(num_obj_samples, n_obj, raw_train_ds)
-                torch.save(image_set, os.path.join(self.root, f"train-images-{n_obj}obj-{num_obj_samples}samples.pt"))
-                with open(os.path.join(self.root, f"train-labels-{n_obj}obj-{num_obj_samples}samples.json"), "w") as f:
-                    json.dump(label_set, f)
-                target_set = self.target_gen(label_set)
-                torch.save(target_set, os.path.join(self.root, f"train-targets-{n_obj}obj-{num_obj_samples}samples.pt"))
-                self.data += image_set
-                self.labels += label_set
-                self.targets += target_set
+            raw_ds = MNIST(root=os.path.join(self.root, ".."), train=True, download=True)
+            type = "train"
         else:
             # I assume training and testing set are mutually exclusive
-            raw_test_ds = MNIST(root=os.path.join(self.root, ".."), train=False, download=True)
-            image_set = []
-            label_set = []
-            for n_obj in range(1, self.max_num_objects+1):
-                _image_set, _label_set = self.data_gen(num_obj_samples, n_obj, raw_test_ds)
-                image_set += _image_set
-                label_set += _label_set
-            torch.save(image_set, os.path.join(self.root, f"test-images-{self.num_samples}samples.pt"))
-            with open(os.path.join(self.root, f"test-labels-{self.num_samples}samples.json"), "w") as f:
+            raw_ds = MNIST(root=os.path.join(self.root, ".."), train=False, download=True)
+            type = "test"
+        
+        for n_obj in range(1, self.max_num_objects+1):
+            image_set, label_set = self.data_gen(num_obj_samples, n_obj, raw_ds)
+            torch.save(image_set, os.path.join(self.root, f"{type}-images-{n_obj}obj-{num_obj_samples}samples.pt"))
+            with open(os.path.join(self.root, f"{type}-labels-{n_obj}obj-{num_obj_samples}samples.json"), "w") as f:
                 json.dump(label_set, f)
             target_set = self.target_gen(label_set)
-            torch.save(target_set, os.path.join(self.root, f"test-targets-{self.num_samples}samples.pt"))
-            self.data = image_set
-            self.labels = label_set
-            self.targets = target_set
-
+            torch.save(target_set, os.path.join(self.root, f"{type}-targets-{n_obj}obj-{num_obj_samples}samples.pt"))
+            self.data += image_set
+            self.labels += label_set
+            self.targets += target_set
 
     def data_gen(self, num_samples, num_objs, raw_ds: MNIST) -> [list, list]:
         image_set = []
@@ -156,7 +134,7 @@ class MultiConceptMNIST(VisionDataset):
                         pos.add((pos_x, pos_y))
                         break
                 color_idx = random.randint(0, self.num_colors-1)
-                mnist_idx = random.randint(0, 9999) # 10k images in MNIST test set
+                mnist_idx = random.randint(0, 59999 if raw_ds.train else 9999)
                 digit_image = raw_ds.data[mnist_idx, :, :]
                 for k in self.COLOR_SET[color_idx]:
                     image_tensor[pos_y*28:(pos_y+1)*28, pos_x*28:(pos_x+1)*28, k] = digit_image

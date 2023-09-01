@@ -14,6 +14,7 @@ from colorama import Fore
 from torch.utils.tensorboard import SummaryWriter
 
 TEST_BATCH_SIZE = 1
+VERBOSE = 1
 NUM_ITERATIONS = 100
 DIM = 1000
 NUM_TEST_SAMPLES = 400
@@ -107,7 +108,7 @@ def factorization(resonator_network, inputs, init_estimates):
             object = resonator_network.vsa[[result[i]]]
             inputs[i] = inputs[i] - object
 
-    return result_set, convergence
+    return result_set, converg_set
 
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -124,14 +125,14 @@ if __name__ == "__main__":
     # targets in VSATensor([B, D])
 
     incorrect_count = [0] * MAX_NUM_OBJECTS
-    # unconverged = [0, 0] * MAX_NUM_OBJECTS   # [correct, incorrect]
+    unconverged = [[0,0] for _ in range(MAX_NUM_OBJECTS)]    # [correct, incorrect]
 
     resonator_network = Resonator(vsa, type="CONCURRENT", norm=False, activation="NONE", iterations=NUM_ITERATIONS, device=device)
     init_estimates = gen_init_estimates(vsa.codebooks, TEST_BATCH_SIZE)
 
     model.eval()
     n = 0
-    for images, labels, targets in tqdm(test_dl, desc="Test"):
+    for images, labels, targets in tqdm(test_dl, desc="Test", leave=True if VERBOSE >= 1 else False):
         # plt.figure()
         # plt.imshow(images[0])
         # plt.show()
@@ -139,51 +140,47 @@ if __name__ == "__main__":
 
         # TODO Add inference step
 
-        # images = images.to(device)
-        # images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
-        # infer_result = model(images_nchw)[0].round().type(torch.int8).cpu() # TODO replace with inference result
+        images = images.to(device)
+        images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
+        infer_result = model(images_nchw)[0].round().type(torch.int8).cpu() # TODO replace with inference result
         
-        infer_result = targets.clone()
-
         # Factorization
         outcomes, convergence = factorization(resonator_network, infer_result, init_estimates)
 
         # Compare results
         # Batch: multiple samples
         for i in range(len(labels)):
-            print(Fore.BLUE + "Test {}".format(n) + Fore.RESET)
-            print("Inference result similarity = {:.4f}".format(hd.cosine_similarity(infer_result[i], targets[i]).item()))
 
             incorrect = False
             message = ""
             label = labels[i]
             # Sample: multiple objects
-            for l in label:
+            for j in range(len(label)):
                 # Incorrect if one object is not detected 
                 # For n objects, only check the first n results
-                if (l not in outcomes[i][0: len(label)+1]):
-                    message += Fore.RED + "Object {} is not detected.".format(l) + Fore.RESET + "\n"
+                if (label[j] not in outcomes[i][0: len(label)+1]):
+                    message += Fore.RED + "Object {} is not detected.".format(label[j]) + Fore.RESET + "\n"
                     incorrect = True
-                    # unconverged[1] += 1 if convergence == NUM_ITERATIONS-1 else 0
+                    unconverged[len(label)-1][1] += 1 if convergence[i][j] == NUM_ITERATIONS-1 else 0
                 else:
-                    message += "Object {} is correctly detected.".format(l) + "\n"
-                    # unconverged[0] += 1 if convergence == NUM_ITERATIONS-1 else 0
+                    message += "Object {} is correctly detected.".format(label[j]) + "\n"
+                    unconverged[len(label)-1][0] += 1 if convergence[i][j] == NUM_ITERATIONS-1 else 0
 
             if incorrect:
-                print(f"Test {n} Failed")
-                print("Convergence: {}".format(convergence))
-                print(message)
                 incorrect_count[len(label)-1] += 1 if incorrect else 0
+                if (VERBOSE >= 1):
+                    print(Fore.BLUE + f"Test {n} Failed:      Convergence = {convergence[i]}" + Fore.RESET)
+                    print("Inference result similarity = {:.4f}".format(hd.cosine_similarity(infer_result[i], targets[i]).item()))
+                    print(message[:-1])
             else:
-                print(f"Test {n} Passed")
-                print("Convergence: {}".format(convergence))
-                print(message)
-
+                if (VERBOSE >= 2):
+                    print(Fore.BLUE + f"Test {n} Passed:      Convergence = {convergence[i]}" + Fore.RESET)
+                    print("Inference result similarity = {:.4f}".format(hd.cosine_similarity(infer_result[i], targets[i]).item()))
+                    print(message[:-1])
             n += 1
 
     for i in range(MAX_NUM_OBJECTS):
-        print(f"{i+1} objects: Accuracy = {NUM_TEST_SAMPLES//MAX_NUM_OBJECTS - incorrect_count[i]}/{NUM_TEST_SAMPLES//MAX_NUM_OBJECTS}")
-        # print(f"{i+1} objects: Accuracy = {NUM_TEST_SAMPLES//MAX_NUM_OBJECTS - incorrect_count[i]}/{NUM_TEST_SAMPLES//MAX_NUM_OBJECTS}     Unconverged = {unconverged}/{NUM_TEST_SAMPLES//MAX_NUM_OBJECTS}")
+        print(f"{i+1} objects: Accuracy = {NUM_TEST_SAMPLES//MAX_NUM_OBJECTS - incorrect_count[i]}/{NUM_TEST_SAMPLES//MAX_NUM_OBJECTS}     Unconverged = {unconverged[i]}/{NUM_TEST_SAMPLES//MAX_NUM_OBJECTS}")
 
 
        
