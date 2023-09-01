@@ -12,6 +12,10 @@ from model.nn_non_decomposed import MultiConceptNonDecomposed
 from itertools import chain
 from colorama import Fore
 from torch.utils.tensorboard import SummaryWriter
+import sys
+import os
+from datetime import datetime
+from pytz import timezone
 
 TEST_BATCH_SIZE = 1
 VERBOSE = 1
@@ -115,9 +119,15 @@ if __name__ == "__main__":
 
     train_dl, test_dl, vsa = get_train_test_dls(device)
     model, loss_fn, optimizer = get_model_loss_optimizer()
-    # train(train_dl, model, loss_fn, optimizer, num_epoch=10)
-    # model_weight_loc = f"./data/multi-concept-MNIST/{DIM}dim-{NUM_POS_X}x{NUM_POS_Y}y-{NUM_COLOR}color/model_weight.pt"
-    # torch.save(model.state_dict(), model_weight_loc)
+    # assume we provided checkpoint path at the end of the command line
+    if sys.argv[-1].endswith(".pt") and os.path.exists(sys.argv[-1]):
+        checkpoint = torch.load(sys.argv[-1])
+        model.load_state_dict(checkpoint)
+    else:
+        train(train_dl, model, loss_fn, optimizer, num_epoch=10)
+        cur_time_pst = datetime.now().astimezone(timezone('US/Pacific')).strftime("%m-%d-%H-%M")
+        model_weight_loc = f"./data/{DIM}dim-{NUM_POS_X}x{NUM_POS_Y}y-{NUM_COLOR}color/model_weight_{cur_time_pst}.pt"
+        torch.save(model.state_dict(), model_weight_loc)
 
     # Inference
     # images in tensor([B, H, W, C])
@@ -142,7 +152,7 @@ if __name__ == "__main__":
 
         images = images.to(device)
         images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
-        infer_result = model(images_nchw)[0].round().type(torch.int8).cpu() # TODO replace with inference result
+        infer_result = model(images_nchw)[0].round().type(torch.int8)
         
         # Factorization
         outcomes, convergence = factorization(resonator_network, infer_result, init_estimates)
