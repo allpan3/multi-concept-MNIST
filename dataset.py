@@ -3,7 +3,7 @@
 
 # %%
 from torchvision import transforms
-from torchvision.datasets import MNIST, utils
+from torchvision.datasets import MNIST
 from torchvision.datasets.vision import VisionDataset
 import torch.utils.data as data
 import torch
@@ -76,12 +76,12 @@ class MultiConceptMNIST(VisionDataset):
     def _check_exists(self, train: bool) -> bool:
         if (train):
             return all(
-                utils.check_integrity(os.path.join(self.root, file))
+                os.path.exists(os.path.join(self.root, file))
                 for file in [f"train-images-{n}obj-{self.num_samples//self.max_num_objects}samples.pt" for n in range(1, self.max_num_objects+1)]
             )
         else:
             return all(
-                utils.check_integrity(os.path.join(self.root, file))
+                os.path.exists(os.path.join(self.root, file))
                 for file in [f"test-images-{self.num_samples}samples.pt"]
             )
 
@@ -92,14 +92,7 @@ class MultiConceptMNIST(VisionDataset):
     def _load_data(self, path: str):
         return torch.load(path)
 
-    def __getitem__(self, index: int) -> Tuple[Any, Any]:
-        '''
-        Args:
-            index (int): Index
-        
-        Returns:
-            tuple: (image, target) where target is key of the target class.
-        '''
+    def __getitem__(self, index: int):
         return self.data[index], self.labels[index], self.targets[index]
 
     def __len__(self) -> int:
@@ -191,8 +184,6 @@ class MultiConceptMNIST(VisionDataset):
         if type(label_set) == str:
             with open(label_set, "r") as f:
                 label_set = json.load(f)
-        elif type(label_set) == list:
-            pass
         
         target_set = []
         for label in label_set:

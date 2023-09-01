@@ -1,0 +1,6 @@
+torch-hd
+torch
+torchvision
+tqdm
+colorama
+tensorboard
