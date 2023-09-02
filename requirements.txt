@@ -4,3 +4,4 @@ torchvision
 tqdm
 colorama
 tensorboard
+matplotlib

@@ -110,7 +110,7 @@ class Resonator(nn.Module):
             # f elements, each is VSATensor of (b, v)
             similarity = [None] * f 
             # Ensure no overflow
-            output = hd.ensure_vsa_tensor(torch.empty((b, f, d), dtype=torch.int64))
+            output = hd.ensure_vsa_tensor(torch.empty((b, f, d), dtype=torch.int64, device=self.vsa.device))
             for i in range(f):
                 # All batches, the i-th factor compared with the i-th codebook
                 similarity[i] = self.vsa.similarity(new_estimates[:,i], codebooks[i]) 

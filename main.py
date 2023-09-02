@@ -18,14 +18,18 @@ from datetime import datetime
 from pytz import timezone
 
 TEST_BATCH_SIZE = 1
-VERBOSE = 1
+VERBOSE = 2
 NUM_ITERATIONS = 100
 DIM = 1000
-NUM_TEST_SAMPLES = 400
+TRAIN_EPOCH = 50
+NUM_TRAIN_SAMPLES = 50000
+NUM_TEST_SAMPLES = 300
 MAX_NUM_OBJECTS = 2
 NUM_POS_X = 3
 NUM_POS_Y = 3
 NUM_COLOR = 3
+
+data_dir = f"./data/{DIM}dim-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color"
 
 def collate_fn(batch):
     imgs = torch.stack([x[0] for x in batch], dim=0)
@@ -35,9 +39,8 @@ def collate_fn(batch):
 
 
 def get_train_test_dls(device = "cpu"):
-    data_dir = f"./data/{DIM}dim-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color"
-    vsa = MultiConceptMNISTVSA(data_dir, dim=DIM, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, seed=None, device=device)
-    train_ds = MultiConceptMNIST(data_dir, vsa, train=True, num_samples=24000, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
+    vsa = MultiConceptMNISTVSA(data_dir, dim=DIM, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, seed=0, device=device)
+    train_ds = MultiConceptMNIST(data_dir, vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
     test_ds = MultiConceptMNIST(data_dir, vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
     train_ld = DataLoader(train_ds, batch_size=128, shuffle=True, collate_fn=collate_fn)
     test_ld = DataLoader(test_ds, batch_size=TEST_BATCH_SIZE, shuffle=False, collate_fn=collate_fn)
@@ -52,12 +55,11 @@ def get_model_loss_optimizer():
         model.cuda()
     return model, loss_fn, optimizer
 
-def train(dataloader, model, loss_fn, optimizer, num_epoch=1):
+def train(dataloader, model, loss_fn, optimizer, num_epoch=1, device = "cpu"):
     writer = SummaryWriter()
     # images in tensor([B, H, W, C])
     # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
     # targets in VSATensor([B, D])
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     for epoch in range(num_epoch):
         for idx, (images, labels, targets) in enumerate(tqdm(dataloader, desc="train")):
             images = images.to(device)
@@ -84,9 +86,8 @@ def gen_init_estimates(codebooks: hd.VSATensor or list, batch_size) -> hd.VSATen
     
     return init_estimates.unsqueeze(0).repeat(batch_size,1,1)
 
-def factorization(resonator_network, inputs, init_estimates):
-    
-    inputs = inputs.clone()
+def factorization(vsa, resonator_network, inputs, init_estimates):
+    inputs = vsa.ensure_vsa_tensor(inputs).clone()
 
     result_set = [[] for _ in range(inputs.size(0))]
     converg_set = [[] for _ in range(inputs.size(0))]
@@ -109,7 +110,7 @@ def factorization(resonator_network, inputs, init_estimates):
 
             # Get the object vector and subtract it from the input
             # Key must be a list of tuple
-            object = resonator_network.vsa[[result[i]]]
+            object = vsa[[result[i]]]
             inputs[i] = inputs[i] - object
 
     return result_set, converg_set
@@ -124,9 +125,9 @@ if __name__ == "__main__":
         checkpoint = torch.load(sys.argv[-1])
         model.load_state_dict(checkpoint)
     else:
-        train(train_dl, model, loss_fn, optimizer, num_epoch=10)
+        train(train_dl, model, loss_fn, optimizer, num_epoch=50, device=device)
         cur_time_pst = datetime.now().astimezone(timezone('US/Pacific')).strftime("%m-%d-%H-%M")
-        model_weight_loc = f"./data/{DIM}dim-{NUM_POS_X}x{NUM_POS_Y}y-{NUM_COLOR}color/model_weight_{cur_time_pst}.pt"
+        model_weight_loc = os.path.join(data_dir, f"model_weight_{cur_time_pst}.pt")
         torch.save(model.state_dict(), model_weight_loc)
 
     # Inference
@@ -152,10 +153,10 @@ if __name__ == "__main__":
 
         images = images.to(device)
         images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
-        infer_result = model(images_nchw)[0].round().type(torch.int8)
+        infer_result = model(images_nchw).round().type(torch.int8)
         
         # Factorization
-        outcomes, convergence = factorization(resonator_network, infer_result, init_estimates)
+        outcomes, convergence = factorization(vsa, resonator_network, infer_result, init_estimates)
 
         # Compare results
         # Batch: multiple samples
