@@ -138,6 +138,7 @@ class Resonator(nn.Module):
 
     
     def normalize(self, input):
+        input = self.vsa.ensure_vsa_tensor(input)
         if isinstance(input, hd.MAPTensor):
             return hd.hard_quantize(input)
         elif isinstance(input, hd.BSCTensor):
