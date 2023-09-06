@@ -10,11 +10,11 @@ import torch
 import random
 import json
 import os
-from model.vsa import MultiConceptMNISTVSA
+from model.vsa import MultiConceptMNISTVSA1
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
-class MultiConceptMNIST(VisionDataset):
+class MultiConceptMNIST1(VisionDataset):
 
     COLOR_SET = [
         range(0,3),   # white
@@ -29,7 +29,7 @@ class MultiConceptMNIST(VisionDataset):
     def __init__(
         self,
         root: str,
-        vsa: MultiConceptMNISTVSA,
+        vsa: MultiConceptMNISTVSA1,
         train: bool,      # training set or test set
         num_samples: int,
         force_gen: bool = False,  # generate dataset even if it exists
@@ -95,11 +95,11 @@ class MultiConceptMNIST(VisionDataset):
         os.makedirs(self.root, exist_ok=True)
 
         if train:
-            raw_ds = MNIST(root=os.path.join(self.root, ".."), train=True, download=True)
+            raw_ds = MNIST(root=os.path.join(self.root, "../.."), train=True, download=True)
             type = "train"
         else:
             # I assume training and testing set are mutually exclusive
-            raw_ds = MNIST(root=os.path.join(self.root, ".."), train=False, download=True)
+            raw_ds = MNIST(root=os.path.join(self.root, "../.."), train=False, download=True)
             type = "test"
         
         for n_obj in range(1, self.max_num_objects+1):

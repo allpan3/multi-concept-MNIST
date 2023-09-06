@@ -1,11 +1,11 @@
 
 import torch
-from model.vsa import MultiConceptMNISTVSA
-from model.resonator import Resonator
-from dataset import MultiConceptMNIST
+from model.vsa import MultiConceptMNISTVSA1
+from vsa import Resonator
+from dataset import MultiConceptMNIST1
 from torch.utils.data import DataLoader
-import torchhd as hd
 import torch
+from torch import Tensor
 from tqdm import tqdm
 from matplotlib import pyplot as plt
 from model.nn_non_decomposed import MultiConceptNonDecomposed
@@ -17,42 +17,33 @@ import os
 from datetime import datetime
 from pytz import timezone
 
-VERBOSE = 2
-
+VERBOSE = 1
+ALGO = "algo1"
+VSA_MODE = "HARDWARE" # "SOFTWARE", "HARDWARE"
 DIM = 2000
 MAX_NUM_OBJECTS = 2
 NUM_POS_X = 3
 NUM_POS_Y = 3
 NUM_COLOR = 3
 # Train
-TRAIN_EPOCH = 75
+TRAIN_EPOCH = 20
 TRAIN_BATCH_SIZE = 128
-NUM_TRAIN_SAMPLES = 70000
+NUM_TRAIN_SAMPLES = 100000
 # Test
 TEST_BATCH_SIZE = 1
 NUM_TEST_SAMPLES = 300
 # Resonator
-NORMALIZE = False
+NORMALIZE = True
 ACTIVATION = "NONE" # "NONE", "ABS", "NONNEG
 RESONATOR_TYPE = "SEQUENTIAL" # "SEQUENTIAL", "CONCURRENT"
-NUM_ITERATIONS = 1000
+NUM_ITERATIONS = 100
 
-data_dir = f"./data/{DIM}dim-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color"
 
 def collate_fn(batch):
     imgs = torch.stack([x[0] for x in batch], dim=0)
     labels = [x[1] for x in batch]
     targets = torch.stack([x[2] for x in batch], dim=0)
     return imgs, labels, targets
-
-
-def get_train_test_dls(device = "cpu"):
-    vsa = MultiConceptMNISTVSA(data_dir, dim=DIM, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, seed=0, device=device)
-    train_ds = MultiConceptMNIST(data_dir, vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
-    test_ds = MultiConceptMNIST(data_dir, vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
-    train_ld = DataLoader(train_ds, batch_size=TRAIN_BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
-    test_ld = DataLoader(test_ds, batch_size=TEST_BATCH_SIZE, shuffle=False, collate_fn=collate_fn)
-    return train_ld, test_ld, vsa
 
 
 def get_model_loss_optimizer():
@@ -82,27 +73,25 @@ def train(dataloader, model, loss_fn, optimizer, num_epoch=1, device = "cpu"):
             writer.add_scalar('Loss/train', loss, epoch * len(dataloader) + idx)
         # import pdb; pdb.set_trace()
 
-
-def gen_init_estimates(codebooks: hd.VSATensor or list, batch_size) -> hd.VSATensor:
-    if (type(codebooks) == list):
-        guesses = [None] * len(codebooks)
-        for i in range(len(codebooks)):
-            guesses[i] = hd.multiset(codebooks[i])
-        init_estimates = torch.stack(guesses)
-    else:
-        init_estimates = hd.multiset(codebooks)
-    
-    return init_estimates.unsqueeze(0).repeat(batch_size,1,1)
-
-def factorization(vsa, resonator_network, inputs, init_estimates):
-    inputs = vsa.ensure_vsa_tensor(inputs).clone()
-
+def factorization_algo1(vsa, resonator_network, inputs, init_estimates, codebooks, orig_indices):
+    # The input vector is an integer vector. Subtract every object vector from the input vector
+    # and feed to the resonator netowrk again to get the next vector
     result_set = [[] for _ in range(inputs.size(0))]
     converg_set = [[] for _ in range(inputs.size(0))]
+
+    inputs = inputs.clone()
+
     # Always try to extract MAX_NUM_OBJECTS objects
     for k in range(MAX_NUM_OBJECTS):
-        # Run resonator network
-        result, convergence = resonator_network(inputs, init_estimates)
+
+        # In hardware mode the input is expected to be normalized, so shouldn't do it here
+        if NORMALIZE and VSA_MODE == "SOFTWARE":
+            inputs_ = vsa.normalize(inputs)
+        else:
+            inputs_ = inputs
+
+         # Run resonator network
+        result, convergence = resonator_network(inputs_, init_estimates, codebooks, orig_indices)
 
         # Split batch results
         for i in range(len(result)):
@@ -123,12 +112,44 @@ def factorization(vsa, resonator_network, inputs, init_estimates):
 
     return result_set, converg_set
 
+def get_similarity(v1, v2):
+    dtype = torch.get_default_dtype()
+
+    self_dot = torch.sum(v1 * v1, dim=-1, dtype=dtype)
+    self_mag = torch.sqrt(self_dot)
+
+    others_dot = torch.sum(v2 * v2, dim=-1, dtype=dtype)
+    others_mag = torch.sqrt(others_dot)
+
+    magnitude = self_mag * others_mag
+
+    magnitude = torch.clamp(magnitude, min=1e-08)
+
+    if VSA_MODE == "SOFTWARE":
+        return torch.matmul(v1.type(torch.float32), v2.type(torch.float32)) / magnitude
+    else:
+        return torch.sum(torch.where(v1 == v2, 1, -1), dim=-1) / magnitude
+
+def test_dir():
+    if ALGO == "algo1":
+        return f"./tests/algo1/{VSA_MODE}-{DIM}dim-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color"
+
+def get_dataset():
+    if ALGO == "algo1":
+        vsa = MultiConceptMNISTVSA1(test_dir(), model=VSA_MODE, dim=DIM, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, seed=0, device=device)
+        train_ds = MultiConceptMNIST1(test_dir(), vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
+        test_ds = MultiConceptMNIST1(test_dir(), vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
+        train_dl = DataLoader(train_ds, batch_size=TRAIN_BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
+        test_dl = DataLoader(test_ds, batch_size=TEST_BATCH_SIZE, shuffle=False, collate_fn=collate_fn)
+    
+    return vsa, train_dl, test_dl
+
+
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
-
     print(f"Workload Config: dim = {DIM}, num pos x = {NUM_POS_X}, num pos y = {NUM_POS_Y}, num color = {NUM_COLOR}, num digits = 10, max num objects = {MAX_NUM_OBJECTS}")
 
-    train_dl, test_dl, vsa = get_train_test_dls(device)
+    vsa, train_dl, test_dl = get_dataset()
     model, loss_fn, optimizer = get_model_loss_optimizer()
     # assume we provided checkpoint path at the end of the command line
     if sys.argv[-1].endswith(".pt") and os.path.exists(sys.argv[-1]):
@@ -138,40 +159,37 @@ if __name__ == "__main__":
         print(f"Training on {device}: samples = {NUM_TRAIN_SAMPLES}, epochs = {TRAIN_EPOCH}, batch size = 128")
         train(train_dl, model, loss_fn, optimizer, num_epoch=50, device=device)
         cur_time_pst = datetime.now().astimezone(timezone('US/Pacific')).strftime("%m-%d-%H-%M")
-        model_weight_loc = os.path.join(data_dir, f"model_weights_{TRAIN_BATCH_SIZE}batch_{TRAIN_EPOCH}epoch_{NUM_TRAIN_SAMPLES}samples_{cur_time_pst}.pt")
+        model_weight_loc = os.path.join(test_dir(), f"model_weights_{MAX_NUM_OBJECTS}objs_{TRAIN_BATCH_SIZE}batch_{TRAIN_EPOCH}epoch_{NUM_TRAIN_SAMPLES}samples_{cur_time_pst}.pt")
         torch.save(model.state_dict(), model_weight_loc)
 
     incorrect_count = [0] * MAX_NUM_OBJECTS
     unconverged = [[0,0] for _ in range(MAX_NUM_OBJECTS)]    # [correct, incorrect]
 
-    resonator_network = Resonator(vsa, type=RESONATOR_TYPE, norm=NORMALIZE, activation=ACTIVATION, iterations=NUM_ITERATIONS, device=device)
-    init_estimates = gen_init_estimates(vsa.codebooks, TEST_BATCH_SIZE)
+    rn = Resonator(vsa, type=RESONATOR_TYPE, activation=ACTIVATION, iterations=NUM_ITERATIONS, device=device)
+
+    codebooks, orig_indices = rn.reorder_codebooks()
+    init_estimates = rn.get_init_estimates(codebooks, NORMALIZE, TEST_BATCH_SIZE)
 
     model.eval()
     n = 0
 
     ## Test
     print(f"Running test on {device}, batch size = {TEST_BATCH_SIZE}")
-    print(f"Resonator setup: type = {RESONATOR_TYPE}, normalize = {NORMALIZE}, activation = {ACTIVATION}, iterations = {resonator_network.iterations}")
+    print(f"Resonator setup: type = {RESONATOR_TYPE}, normalize = {NORMALIZE}, activation = {ACTIVATION}, iterations = {NUM_ITERATIONS}")
+
 
     # images in tensor([B, H, W, C])
     # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
     # targets in VSATensor([B, D])
     for images, labels, targets in tqdm(test_dl, desc="Test", leave=True if VERBOSE >= 1 else False):
-        # plt.figure()
-        # plt.imshow(images[0])
-        # plt.show()
-        # print()
 
-        # TODO Add inference step
 
         images = images.to(device)
         images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
         infer_result = model(images_nchw).round().type(torch.int8)
         
-
         # Factorization
-        outcomes, convergence = factorization(vsa, resonator_network, infer_result, init_estimates)
+        outcomes, convergence = factorization_algo1(vsa, rn, infer_result, init_estimates, codebooks, orig_indices)
 
         # Compare results
         # Batch: multiple samples
@@ -180,8 +198,6 @@ if __name__ == "__main__":
             incorrect = False
             message = ""
             label = labels[i]
-            if NORMALIZE:
-                infer_result[i] = resonator_network.normalize(infer_result[i])
 
             # Sample: multiple objects
             for j in range(len(label)):
@@ -199,18 +215,16 @@ if __name__ == "__main__":
                 incorrect_count[len(label)-1] += 1 if incorrect else 0
                 if (VERBOSE >= 1):
                     print(Fore.BLUE + f"Test {n} Failed:      Convergence = {convergence[i]}" + Fore.RESET)
-                    print("Inference result similarity = {:.4f}".format(hd.cosine_similarity(infer_result[i], targets[i]).item()))
+                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i]).item()))
                     print(message[:-1])
                     print("Outcome = {}".format(outcomes[i][0: len(label)]))
             else:
                 if (VERBOSE >= 2):
                     print(Fore.BLUE + f"Test {n} Passed:      Convergence = {convergence[i]}" + Fore.RESET)
-                    print("Inference result similarity = {:.4f}".format(hd.cosine_similarity(infer_result[i], targets[i]).item()))
+                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i]).item()))
                     print(message[:-1])
             n += 1
 
     for i in range(MAX_NUM_OBJECTS):
         print(f"{i+1} objects: Accuracy = {NUM_TEST_SAMPLES//MAX_NUM_OBJECTS - incorrect_count[i]}/{NUM_TEST_SAMPLES//MAX_NUM_OBJECTS}     Unconverged = {unconverged[i]}/{NUM_TEST_SAMPLES//MAX_NUM_OBJECTS}")
 
-
-       

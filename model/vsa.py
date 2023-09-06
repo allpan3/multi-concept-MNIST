@@ -1,20 +1,8 @@
-############################################################################################
-# The VSA operation portion is inspired by torchhd library, tailored for our project purpose
-# We use only the MAP model, but with two variants: software and hardware models
-# In the software model, the definitions and operations are exactly the same as MAP model
-# In the hardware model, the representation is BSC-like, but the operations are still MAP-like.
-# We use binary in place of bipolar whenever possible to reduce the complexity of the hardware,
-# but the bahaviors still closely follow MAP model.
-# For example, we use XNOR for binding to get the exact same input-output mapping. We bipolize the
-# values in bundle and hamming distance operations to get the same results as MAP model.
-# The original library is located at:
-# https://github.com/hyperdimensional-computing/torchhd.git
-############################################################################################
-
 from typing import Literal
 from vsa import VSA
+import os.path
 
-class MultiConceptMNISTVSA(VSA):
+class MultiConceptMNISTVSA1(VSA):
 
     def __init__(
             self,
