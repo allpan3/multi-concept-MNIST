@@ -1,0 +1,3 @@
+[submodule "pyvsa"]
+	path = pyvsa
+	url = https://github.com/allpan3/pyvsa.git
