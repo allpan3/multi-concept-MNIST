@@ -55,7 +55,7 @@ def train(dataloader, model, loss_fn, optimizer, num_epoch=1, device = "cpu"):
         for idx, (images, labels, targets) in enumerate(tqdm(dataloader, desc=f"Train Epoch {epoch}", leave=False)):
             images = images.to(device)
             images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
-            targets_float = targets.type(torch.float32).to(device)
+            targets_float = targets.to(device).type(torch.float32)
             output = model(images_nchw)
             loss = loss_fn(output, targets_float)
             optimizer.zero_grad()
@@ -322,11 +322,11 @@ if __name__ == "__main__":
     print(f"Workload Config: algorithm = {ALGO}, vsa mode = {VSA_MODE}, dim = {DIM}, num pos x = {NUM_POS_X}, num pos y = {NUM_POS_Y}, num color = {NUM_COLOR}, num digits = 10, max num objects = {MAX_NUM_OBJECTS}")
 
     vsa = get_vsa()
-    model = MultiConceptNonDecomposed(dim=DIM, device=device, vsa_mode=VSA_MODE)
+    model = MultiConceptNonDecomposed(dim=DIM, device=device)
 
     if RUN_MODE == "TRAIN":
         print(f"Training on {device}: samples = {NUM_TRAIN_SAMPLES}, epochs = {TRAIN_EPOCH}, batch size = 128")
-        loss_fn = torch.nn.MSELoss() if VSA_MODE == "SOFTWARE" else torch.nn.BCELoss()
+        loss_fn = torch.nn.MSELoss() if VSA_MODE == "SOFTWARE" else torch.nn.BCEWithLogitsLoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
         train_dl = get_train_data(vsa)
         train(train_dl, model, loss_fn, optimizer, num_epoch=TRAIN_EPOCH, device=device)
