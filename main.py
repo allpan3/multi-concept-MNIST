@@ -5,9 +5,7 @@ from vsa import Resonator
 from dataset import MultiConceptMNIST
 from torch.utils.data import DataLoader
 import torch
-from torch import Tensor
 from tqdm import tqdm
-from matplotlib import pyplot as plt
 from model.nn_non_decomposed import MultiConceptNonDecomposed
 from itertools import chain
 from colorama import Fore
@@ -17,8 +15,8 @@ import os
 from datetime import datetime
 from pytz import timezone
 
-VERBOSE = 1
-RUN_MODE = "TEST" # "TRAIN", "TEST"
+VERBOSE = 2
+RUN_MODE = "TRAIN" # "TRAIN", "TEST", "DATAGEN"
 ALGO = "algo2"
 VSA_MODE = "HARDWARE" # "SOFTWARE", "HARDWARE"
 DIM = 2000
@@ -27,12 +25,12 @@ NUM_POS_X = 3
 NUM_POS_Y = 3
 NUM_COLOR = 3
 # Train
-TRAIN_EPOCH = 10
+TRAIN_EPOCH = 20
 TRAIN_BATCH_SIZE = 128
-NUM_TRAIN_SAMPLES = 100000
+NUM_TRAIN_SAMPLES = 120000
 # Test
 TEST_BATCH_SIZE = 1
-NUM_TEST_SAMPLES = 600
+NUM_TEST_SAMPLES = 300
 # Resonator
 NORMALIZE = False    # Only applies to SOFTWARE mode. This controls the normalization of the input and estimate vectors to the resonator network
 ACTIVATION = "NONE" # "NONE", "ABS", "NONNEG
@@ -49,12 +47,12 @@ def collate_fn(batch):
     return imgs, labels, targets
 
 def train(dataloader, model, loss_fn, optimizer, num_epoch=1, device = "cpu"):
-    writer = SummaryWriter()
+    writer = SummaryWriter(log_dir=f"./runs/{ALGO}-{VSA_MODE}-{DIM}dim-{MAX_NUM_OBJECTS}objs-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color", filename_suffix=f"{TRAIN_BATCH_SIZE}batch-{TRAIN_EPOCH}epoch-{NUM_TRAIN_SAMPLES}samples")
     # images in tensor([B, H, W, C])
     # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
     # targets in VSATensor([B, D])
     for epoch in range(num_epoch):
-        for idx, (images, labels, targets) in enumerate(tqdm(dataloader, desc=f"Train Epoch {epoch}")):
+        for idx, (images, labels, targets) in enumerate(tqdm(dataloader, desc=f"Train Epoch {epoch}", leave=False)):
             images = images.to(device)
             images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
             targets_float = targets.type(torch.float32).to(device)
@@ -94,22 +92,22 @@ def get_vsa():
         vsa = MultiConceptMNISTVSA1(test_dir(), model=VSA_MODE, dim=DIM, max_num_objects=MAX_NUM_OBJECTS, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, seed=0, device=device)
     elif ALGO == "algo2":
         vsa = MultiConceptMNISTVSA2(test_dir(), model=VSA_MODE, dim=DIM, max_num_objects=MAX_NUM_OBJECTS, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, seed=0, device=device)
-    
     return vsa
 
 
 def get_train_data(vsa):
-    train_ds = MultiConceptMNIST(test_dir(), vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
+    train_ds = MultiConceptMNIST(test_dir(), vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, algo=ALGO)
     train_dl = DataLoader(train_ds, batch_size=TRAIN_BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
     return train_dl
 
 def get_test_data(vsa):
-    test_ds = MultiConceptMNIST(test_dir(), vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
+    test_ds = MultiConceptMNIST(test_dir(), vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, algo=ALGO)
     test_dl = DataLoader(test_ds, batch_size=TEST_BATCH_SIZE, shuffle=False, collate_fn=collate_fn)
-    return test_dl
+    
+    return test_dl, test_ds.num_samples
 
 
-def test_algo1(vsa, model, device):
+def test_algo1(vsa, model, test_dl, device):
     """
     Algorithm 1
     The input vector is an un-normalized integer vector. After an object is extracted, it is
@@ -177,7 +175,6 @@ def test_algo1(vsa, model, device):
     unconverged = [[0,0] for _ in range(MAX_NUM_OBJECTS)]    # [correct, incorrect]
     n = 0
 
-    test_dl = get_test_data(vsa)
     # images in tensor([B, H, W, C])
     # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
     # targets in VSATensor([B, D])
@@ -227,7 +224,7 @@ def test_algo1(vsa, model, device):
 
     return incorrect_count, unconverged
 
-def test_algo2(vsa, model, device):
+def test_algo2(vsa, model, test_dl, device):
 
     def factorization(vsa, resonator_network, inputs, init_estimates, id_codebook, codebooks, orig_indices = None):
         result_set = [[] for _ in range(inputs.size(0))]
@@ -271,11 +268,11 @@ def test_algo2(vsa, model, device):
     unconverged = [[0,0] for _ in range(MAX_NUM_OBJECTS)]    # [correct, incorrect]
     n = 0
 
-    test_dl = get_test_data(vsa)
     # images in tensor([B, H, W, C])
     # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
     # targets in VSATensor([B, D])
     for images, labels, targets in tqdm(test_dl, desc="Test", leave=True if VERBOSE >= 1 else False):
+
         # Inference
         images = images.to(device)
         images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
@@ -322,7 +319,7 @@ def test_algo2(vsa, model, device):
 
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Workload Config: vsa mode = {VSA_MODE}, dim = {DIM}, num pos x = {NUM_POS_X}, num pos y = {NUM_POS_Y}, num color = {NUM_COLOR}, num digits = 10, max num objects = {MAX_NUM_OBJECTS}")
+    print(f"Workload Config: algorithm = {ALGO}, vsa mode = {VSA_MODE}, dim = {DIM}, num pos x = {NUM_POS_X}, num pos y = {NUM_POS_Y}, num color = {NUM_COLOR}, num digits = 10, max num objects = {MAX_NUM_OBJECTS}")
 
     vsa = get_vsa()
     model = MultiConceptNonDecomposed(dim=DIM, device=device)
@@ -336,9 +333,12 @@ if __name__ == "__main__":
         cur_time_pst = datetime.now().astimezone(timezone('US/Pacific')).strftime("%m-%d-%H-%M")
         model_weight_loc = os.path.join(test_dir(), f"model_weights_{MAX_NUM_OBJECTS}objs_{TRAIN_BATCH_SIZE}batch_{TRAIN_EPOCH}epoch_{NUM_TRAIN_SAMPLES}samples_{cur_time_pst}.pt")
         torch.save(model.state_dict(), model_weight_loc)
+        print(f"Model weights saved to {model_weight_loc}")
 
     # Test mode
-    else:
+    elif RUN_MODE == "TEST":
+        print(f"Running test on {device}, batch size = {TEST_BATCH_SIZE}")
+
         # assume we provided checkpoint path at the end of the command line
         if sys.argv[-1].endswith(".pt") and os.path.exists(sys.argv[-1]):
             checkpoint = torch.load(sys.argv[-1])
@@ -349,15 +349,21 @@ if __name__ == "__main__":
 
         model.eval()
 
-        print(f"Running test {ALGO} on {device}, batch size = {TEST_BATCH_SIZE}")
         print(f"Resonator setup: type = {RESONATOR_TYPE}, normalize = {NORMALIZE}, activation = {ACTIVATION}, iterations = {NUM_ITERATIONS}")
-        
-        if ALGO == "algo1":
-            incorrect_count, unconverged = test_algo1(vsa, model, device)
-        elif ALGO == "algo2":
-            incorrect_count, unconverged = test_algo2(vsa, model, device)
 
+        test_dl, num_samples = get_test_data(vsa)
+ 
+        if ALGO == "algo1":
+            incorrect_count, unconverged = test_algo1(vsa, model, test_dl, device)
+        elif ALGO == "algo2":
+            incorrect_count, unconverged = test_algo2(vsa, model, test_dl, device)
 
         for i in range(MAX_NUM_OBJECTS):
-            print(f"{i+1} objects: Accuracy = {NUM_TEST_SAMPLES//MAX_NUM_OBJECTS - incorrect_count[i]}/{NUM_TEST_SAMPLES//MAX_NUM_OBJECTS}     Unconverged = {unconverged[i]}/{NUM_TEST_SAMPLES//MAX_NUM_OBJECTS}")
+            print(f"{i+1} objects: Accuracy = {num_samples[i] - incorrect_count[i]}/{num_samples[i]}     Unconverged = {unconverged[i]}/{num_samples[i]}")
+
+    # Data Gen mode      
+    else:
+        MultiConceptMNIST(test_dir(), vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True, algo=ALGO)
+        MultiConceptMNIST(test_dir(), vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True, algo=ALGO)
+    
 

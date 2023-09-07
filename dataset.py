@@ -37,14 +37,29 @@ class MultiConceptMNIST(VisionDataset):
         num_pos_x: int = 3,
         num_pos_y: int = 3,
         num_colors: int = 7,
+        algo: str = "algo1",
         transform: Optional[Callable] = None,
         target_transform: Optional[Callable] = None
     ) -> None:
         super().__init__(root, transform=transform, target_transform=target_transform)
 
-        assert num_samples % max_num_objects == 0, "Samples evenly distriubted among object counts, so num_samples must be divisible by max_num_objects"
+        if (train):
+            self.num_samples = [0] * max_num_objects
+            if max_num_objects == 1:
+                self.num_samples[0] = num_samples
+            elif max_num_objects == 2:
+                self.num_samples[0] = int(num_samples * 0.3)
+                self.num_samples[1] = int(num_samples * 0.7)
+            elif max_num_objects == 3:
+                self.num_samples[0] = int(num_samples * 0.15)
+                self.num_samples[1] = int(num_samples * 0.35)
+                self.num_samples[2] = int(num_samples * 0.5)
+            else:
+                raise NotImplementedError
+        else:
+            self.num_samples = [num_samples // max_num_objects] * max_num_objects
 
-        self.num_samples = num_samples
+
         assert(vsa.num_pos_x == num_pos_x)
         assert(vsa.num_pos_y == num_pos_y)
         assert(vsa.num_colors == num_colors)
@@ -54,7 +69,9 @@ class MultiConceptMNIST(VisionDataset):
         self.num_colors = num_colors
         assert(max_num_objects <= num_pos_x * num_pos_y)
         self.max_num_objects = max_num_objects
+        
 
+        self.algo = algo
         self.data = []
         self.labels = []
         self.targets = []
@@ -64,15 +81,15 @@ class MultiConceptMNIST(VisionDataset):
         if force_gen or not self._check_exists(type):
             self.dataset_gen(train)
         else:
-            for i in range(1, self.max_num_objects+1):
-                self.data += self._load_data(os.path.join(self.root, f"{type}-images-{i}obj-{num_samples//max_num_objects}samples.pt"))
-                self.labels += self._load_label(os.path.join(self.root, f"{type}-labels-{i}obj-{num_samples//max_num_objects}samples.json"))
-                self.targets += self._load_data(os.path.join(self.root, f"{type}-targets-{i}obj-{num_samples//max_num_objects}samples.pt"))
+            for i in range(0, self.max_num_objects):
+                self.data += self._load_data(os.path.join(self.root, f"{type}-images-{i+1}obj-{self.num_samples[i]}samples.pt"))
+                self.labels += self._load_label(os.path.join(self.root, f"{type}-labels-{i+1}obj-{self.num_samples[i]}samples.json"))
+                self.targets += self._load_data(os.path.join(self.root, f"{type}-targets-{i+1}obj-{self.num_samples[i]}samples.pt"))
  
     def _check_exists(self, type: str) -> bool:
         return all(
             os.path.exists(os.path.join(self.root, file))
-            for file in [f"{type}-images-{n}obj-{self.num_samples//self.max_num_objects}samples.pt" for n in range(1, self.max_num_objects+1)]
+            for file in [f"{type}-images-{n+1}obj-{self.num_samples[n]}samples.pt" for n in range(self.max_num_objects)]
         )
 
     def _load_label(self, path: str):
@@ -91,7 +108,6 @@ class MultiConceptMNIST(VisionDataset):
     def dataset_gen(self, train: bool):
         assert(self.num_colors <= len(self.COLOR_SET))
 
-        num_obj_samples = self.num_samples // self.max_num_objects
         os.makedirs(self.root, exist_ok=True)
 
         if train:
@@ -102,13 +118,14 @@ class MultiConceptMNIST(VisionDataset):
             raw_ds = MNIST(root=os.path.join(self.root, "../.."), train=False, download=True)
             type = "test"
         
-        for n_obj in range(1, self.max_num_objects+1):
-            image_set, label_set = self.data_gen(num_obj_samples, n_obj, raw_ds)
-            torch.save(image_set, os.path.join(self.root, f"{type}-images-{n_obj}obj-{num_obj_samples}samples.pt"))
-            with open(os.path.join(self.root, f"{type}-labels-{n_obj}obj-{num_obj_samples}samples.json"), "w") as f:
+        for n in range(self.max_num_objects):
+            n_obj = n + 1
+            image_set, label_set = self.data_gen(self.num_samples[n], n_obj, raw_ds)
+            torch.save(image_set, os.path.join(self.root, f"{type}-images-{n_obj}obj-{self.num_samples[n]}samples.pt"))
+            with open(os.path.join(self.root, f"{type}-labels-{n_obj}obj-{self.num_samples[n]}samples.json"), "w") as f:
                 json.dump(label_set, f)
             target_set = self.target_gen(label_set)
-            torch.save(target_set, os.path.join(self.root, f"{type}-targets-{n_obj}obj-{num_obj_samples}samples.pt"))
+            torch.save(target_set, os.path.join(self.root, f"{type}-targets-{n_obj}obj-{self.num_samples[n]}samples.pt"))
             self.data += image_set
             self.labels += label_set
             self.targets += target_set
@@ -123,7 +140,10 @@ class MultiConceptMNIST(VisionDataset):
             # [H, W, C]
             image_tensor = torch.zeros(28*self.num_pos_y, 28*self.num_pos_x, 3, dtype=torch.uint8)
             label = []
-            label_uni = [] # Check the coverage of generation
+            if self.algo == "algo1": 
+                label_uni = set() # Check the coverage of generation
+            elif self.algo == "algo2": 
+                label_uni = []    # Check the coverage of generation
             # one object max per position
             pos = set()
             for j in range(num_objs):
@@ -148,8 +168,12 @@ class MultiConceptMNIST(VisionDataset):
 
                 label.append(object)
                 # For coverage check. Since pos is checked to be unique, objects are unique
-                label_uni.append((pos_x, pos_y, color_idx, raw_ds.targets[mnist_idx].item()))
                 
+                if self.algo == "algo1": 
+                    label_uni.add((pos_x, pos_y, color_idx, raw_ds.targets[mnist_idx].item()))
+                elif self.algo == "algo2":
+                    label_uni.append((pos_x, pos_y, color_idx, raw_ds.targets[mnist_idx].item()))
+
             # For coverage check, convert to tuple to make it hashable and unordered
             label_set_uni.add(tuple(label_uni)) 
             label_set.append(label)
@@ -168,4 +192,3 @@ class MultiConceptMNIST(VisionDataset):
             target_set.append(self.vsa.lookup(label))
         return target_set
         
-# %%
