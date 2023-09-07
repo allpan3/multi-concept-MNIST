@@ -322,11 +322,11 @@ if __name__ == "__main__":
     print(f"Workload Config: algorithm = {ALGO}, vsa mode = {VSA_MODE}, dim = {DIM}, num pos x = {NUM_POS_X}, num pos y = {NUM_POS_Y}, num color = {NUM_COLOR}, num digits = 10, max num objects = {MAX_NUM_OBJECTS}")
 
     vsa = get_vsa()
-    model = MultiConceptNonDecomposed(dim=DIM, device=device)
+    model = MultiConceptNonDecomposed(dim=DIM, device=device, vsa_mode=VSA_MODE)
 
     if RUN_MODE == "TRAIN":
         print(f"Training on {device}: samples = {NUM_TRAIN_SAMPLES}, epochs = {TRAIN_EPOCH}, batch size = 128")
-        loss_fn = torch.nn.MSELoss()
+        loss_fn = torch.nn.MSELoss() if VSA_MODE == "SOFTWARE" else torch.nn.BCELoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
         train_dl = get_train_data(vsa)
         train(train_dl, model, loss_fn, optimizer, num_epoch=TRAIN_EPOCH, device=device)
