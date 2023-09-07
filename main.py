@@ -276,7 +276,11 @@ def test_algo2(vsa, model, test_dl, device):
         # Inference
         images = images.to(device)
         images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
-        infer_result = model(images_nchw).round().type(torch.int8)
+        infer_result = model(images_nchw)
+        if VSA_MODE == "SOFTWARE":
+            infer_result = infer_result.round().type(torch.int8)
+        else:
+            infer_result = torch.sigmoid(infer_result).round().type(torch.int8)
 
         # Factorization
         outcomes, convergence = factorization(vsa, rn, infer_result, init_estimates, id_cb, codebooks, orig_indices)
