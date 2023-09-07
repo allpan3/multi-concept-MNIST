@@ -10,11 +10,11 @@ import torch
 import random
 import json
 import os
-from model.vsa import MultiConceptMNISTVSA1
+from vsa import VSA
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
-class MultiConceptMNIST1(VisionDataset):
+class MultiConceptMNIST(VisionDataset):
 
     COLOR_SET = [
         range(0,3),   # white
@@ -29,7 +29,7 @@ class MultiConceptMNIST1(VisionDataset):
     def __init__(
         self,
         root: str,
-        vsa: MultiConceptMNISTVSA1,
+        vsa: VSA,
         train: bool,      # training set or test set
         num_samples: int,
         force_gen: bool = False,  # generate dataset even if it exists
@@ -165,13 +165,7 @@ class MultiConceptMNIST1(VisionDataset):
         
         target_set = []
         for label in label_set:
-            # Key is a list of tuples of (pos_x, pos_y, color, digit)
-            # The order of objects in the list does not matter as they produce the same vector
-            key = []
-            for i in range(len(label)):
-                key.append((label[i]["pos_x"], label[i]["pos_y"], label[i]["color"], label[i]["digit"]))
-            
-            target_set.append(self.vsa[key])
+            target_set.append(self.vsa.lookup(label))
         return target_set
         
 # %%
