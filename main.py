@@ -2,7 +2,7 @@
 import torch
 from model.vsa import MultiConceptMNISTVSA1, MultiConceptMNISTVSA2
 from vsa import Resonator
-from dataset import MultiConceptMNIST
+from dataset import MultiConceptMNIST1, MultiConceptMNIST2
 from torch.utils.data import DataLoader
 import torch
 from tqdm import tqdm
@@ -16,8 +16,8 @@ from datetime import datetime
 from pytz import timezone
 
 VERBOSE = 2
-RUN_MODE = "TRAIN" # "TRAIN", "TEST", "DATAGEN"
-ALGO = "algo2"
+RUN_MODE = "TEST" # "TRAIN", "TEST", "DATAGEN"
+ALGO = "algo2" # "algo1", "algo2"
 VSA_MODE = "HARDWARE" # "SOFTWARE", "HARDWARE"
 DIM = 2000
 MAX_NUM_OBJECTS = 2
@@ -27,15 +27,15 @@ NUM_COLOR = 3
 # Train
 TRAIN_EPOCH = 20
 TRAIN_BATCH_SIZE = 128
-NUM_TRAIN_SAMPLES = 120000
+NUM_TRAIN_SAMPLES = 140000
 # Test
 TEST_BATCH_SIZE = 1
 NUM_TEST_SAMPLES = 300
 # Resonator
 NORMALIZE = False    # Only applies to SOFTWARE mode. This controls the normalization of the input and estimate vectors to the resonator network
-ACTIVATION = "NONE" # "NONE", "ABS", "NONNEG
+ACTIVATION = "NONE"  # "NONE", "ABS", "NONNEG"
 RESONATOR_TYPE = "SEQUENTIAL" # "SEQUENTIAL", "CONCURRENT"
-NUM_ITERATIONS = 100
+NUM_ITERATIONS = 1000
 if VSA_MODE == "HARDWARE":
     NORMALIZE = True # Normalization is forced to be applied in hardware mode
 
@@ -46,8 +46,8 @@ def collate_fn(batch):
     targets = torch.stack([x[2] for x in batch], dim=0)
     return imgs, labels, targets
 
-def train(dataloader, model, loss_fn, optimizer, num_epoch=1, device = "cpu"):
-    writer = SummaryWriter(log_dir=f"./runs/{ALGO}-{VSA_MODE}-{DIM}dim-{MAX_NUM_OBJECTS}objs-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color", filename_suffix=f"{TRAIN_BATCH_SIZE}batch-{TRAIN_EPOCH}epoch-{NUM_TRAIN_SAMPLES}samples")
+def train(dataloader, model, loss_fn, optimizer, num_epoch, cur_time, device = "cpu"):
+    writer = SummaryWriter(log_dir=f"./runs/{cur_time}-{ALGO}-{VSA_MODE}-{DIM}dim-{MAX_NUM_OBJECTS}objs-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color", filename_suffix=f".{TRAIN_BATCH_SIZE}batch-{TRAIN_EPOCH}epoch-{NUM_TRAIN_SAMPLES}samples")
     # images in tensor([B, H, W, C])
     # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
     # targets in VSATensor([B, D])
@@ -64,6 +64,8 @@ def train(dataloader, model, loss_fn, optimizer, num_epoch=1, device = "cpu"):
             print(loss)
             writer.add_scalar('Loss/train', loss, epoch * len(dataloader) + idx)
         # import pdb; pdb.set_trace()
+
+    return round(loss.item(), 4)
 
 
 def get_similarity(v1, v2):
@@ -96,15 +98,22 @@ def get_vsa():
 
 
 def get_train_data(vsa):
-    train_ds = MultiConceptMNIST(test_dir(), vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, algo=ALGO)
+    if ALGO == "algo1":
+        train_ds = MultiConceptMNIST1(test_dir(), vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
+    elif ALGO == "algo2":
+        train_ds = MultiConceptMNIST2(test_dir(), vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
+
     train_dl = DataLoader(train_ds, batch_size=TRAIN_BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
     return train_dl
 
 def get_test_data(vsa):
-    test_ds = MultiConceptMNIST(test_dir(), vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, algo=ALGO)
+    if ALGO == "algo1":
+        test_ds = MultiConceptMNIST2(test_dir(), vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
+    elif ALGO == "algo2":
+        test_ds = MultiConceptMNIST2(test_dir(), vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
+
     test_dl = DataLoader(test_ds, batch_size=TEST_BATCH_SIZE, shuffle=False, collate_fn=collate_fn)
-    
-    return test_dl, test_ds.num_samples
+    return test_dl
 
 
 def test_algo1(vsa, model, test_dl, device):
@@ -116,7 +125,7 @@ def test_algo1(vsa, model, test_dl, device):
     Since the input vector is expected to be un-normalized (except when there's only one object),
     this algorithm cannot extract more than 1 object when running in hardware mode, as the vectors
     are automatically normalized after bundling. The NN model would be trained with normalized vectors.
-    TODO: This should be fixable, but may not be useful as it will require the NN model to be trained
+        This should be fixable, but may not be useful as it will require the NN model to be trained
         with bipolarized vectors, which is exactly the same as in the software mode. So we can just 
         use the NN model trained in software mode and binarize to 1/0 instead of 1/-1 before factorization
         in real hardware.
@@ -124,8 +133,6 @@ def test_algo1(vsa, model, test_dl, device):
     Note we can still normalize the input and estimate vectors (controlled by NORMALIZE flag), but
     the NN model should be trained with un-normalized vectors in this algorithm.
     """
-
-    assert(VSA_MODE == "SOFTWARE")
 
     def factorization(vsa, resonator_network, inputs, init_estimates, codebooks = None, orig_indices = None):
         # The input vector is an integer vector. Subtract every object vector from the input vector
@@ -138,7 +145,7 @@ def test_algo1(vsa, model, test_dl, device):
         # Always try to extract MAX_NUM_OBJECTS objects
         for k in range(MAX_NUM_OBJECTS):
 
-            if NORMALIZE:
+            if NORMALIZE and VSA_MODE == "SOFTWARE":
                 inputs_ = vsa.normalize(inputs)
             else:
                 inputs_ = inputs
@@ -158,10 +165,11 @@ def test_algo1(vsa, model, test_dl, device):
                 )
                 converg_set[i].append(convergence)
 
-                # Get the object vector and subtract it from the input
-                # Key must be a list of tuple
-                object = vsa[[result[i]]]
-                inputs[i] = inputs[i] - object
+                if VSA_MODE == "SOFTWARE":
+                    # Get the object vector and subtract it from the input
+                    # Key must be a list of tuple
+                    object = vsa[[result[i]]]
+                    inputs[i] = inputs[i] - object
 
         return result_set, converg_set
 
@@ -179,12 +187,15 @@ def test_algo1(vsa, model, test_dl, device):
     # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
     # targets in VSATensor([B, D])
     for images, labels, targets in tqdm(test_dl, desc="Test", leave=True if VERBOSE >= 1 else False):
-
         images = images.to(device)
         images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
-        # round() will round numbers near 0 to 0, which is not ideal when there's one object, since the vector should be bipolar
-        # But 0 is legitimate when there are multiple objects. There's no easy fix for this when the model is trained with integer vector. 
-        infer_result = model(images_nchw).round().type(torch.int8)
+        infer_result = model(images_nchw)
+        if VSA_MODE == "SOFTWARE":
+            # round() will round numbers near 0 to 0, which is not ideal when there's one object, since the vector should be bipolar
+            # But 0 is legitimate when there are multiple objects.
+            infer_result = infer_result.round().type(torch.int8)
+        else:
+            infer_result = torch.sigmoid(infer_result).round().type(torch.int8)
 
         # Factorization
         outcomes, convergence = factorization(vsa, rn, infer_result, init_estimates, codebooks, orig_indices)
@@ -195,6 +206,7 @@ def test_algo1(vsa, model, test_dl, device):
             incorrect = False
             message = ""
             label = labels[i]
+            sim_per_obj = []
 
             # Sample: multiple objects
             for j in range(len(label)):
@@ -208,21 +220,27 @@ def test_algo1(vsa, model, test_dl, device):
                     message += "Object {} is correctly detected.".format(label[j]) + "\n"
                     unconverged[len(label)-1][0] += 1 if convergence[i][j] == NUM_ITERATIONS-1 else 0
 
+                # Collect per-object similarity
+                sim_per_obj.append(round(get_similarity(infer_result[i], vsa.lookup([label[j]])).item(), 3))
+
             if incorrect:
                 incorrect_count[len(label)-1] += 1 if incorrect else 0
                 if (VERBOSE >= 1):
                     print(Fore.BLUE + f"Test {n} Failed:      Convergence = {convergence[i]}" + Fore.RESET)
                     print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i]).item()))
+                    print("Per-object similarity = {}".format(sim_per_obj))
                     print(message[:-1])
                     print("Outcome = {}".format(outcomes[i][0: len(label)]))
             else:
                 if (VERBOSE >= 2):
                     print(Fore.BLUE + f"Test {n} Passed:      Convergence = {convergence[i]}" + Fore.RESET)
                     print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i]).item()))
+                    print("Per-object similarity = {}".format(sim_per_obj))
                     print(message[:-1])
             n += 1
 
     return incorrect_count, unconverged
+
 
 def test_algo2(vsa, model, test_dl, device):
 
@@ -259,7 +277,7 @@ def test_algo2(vsa, model, test_dl, device):
 
     # Remove the ID codebook since it is manually unbound
     codebooks = vsa.codebooks[:-1]
-    id_cb = vsa.codebooks[-1]
+    id_cb = vsa.id_codebook
 
     codebooks, orig_indices = rn.reorder_codebooks(codebooks)
     init_estimates = rn.get_init_estimates(codebooks, NORMALIZE, TEST_BATCH_SIZE)
@@ -291,6 +309,7 @@ def test_algo2(vsa, model, test_dl, device):
             incorrect = False
             message = ""
             label = labels[i]
+            sim_per_obj = []
 
             # Sample: multiple objects
             for j in range(len(label)):
@@ -303,18 +322,24 @@ def test_algo2(vsa, model, test_dl, device):
                 else:
                     message += "Object {} is correctly detected.".format(label[j]) + "\n"
                     unconverged[len(label)-1][0] += 1 if convergence[i][j] == NUM_ITERATIONS-1 else 0
+                
+                # Collect per-object similarity: compare the result unbound the ID with the groudtruth vector unbound the ID
+                # This is the actual vector used for factorization
+                sim_per_obj.append(round(get_similarity(vsa.bind(infer_result[i], id_cb[j]), vsa.lookup([label[j]], with_id=False)).item(), 3))
 
             if incorrect:
                 incorrect_count[len(label)-1] += 1 if incorrect else 0
                 if (VERBOSE >= 1):
                     print(Fore.BLUE + f"Test {n} Failed:      Convergence = {convergence[i]}" + Fore.RESET)
                     print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i]).item()))
+                    print("Per-object similarity = {}".format(sim_per_obj))
                     print(message[:-1])
                     print("Outcome = {}".format(outcomes[i][0: len(label)]))
             else:
                 if (VERBOSE >= 2):
                     print(Fore.BLUE + f"Test {n} Passed:      Convergence = {convergence[i]}" + Fore.RESET)
                     print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i]).item()))
+                    print("Per-object similarity = {}".format(sim_per_obj))
                     print(message[:-1])
             n += 1
 
@@ -332,10 +357,10 @@ if __name__ == "__main__":
         print(f"Training on {device}: samples = {NUM_TRAIN_SAMPLES}, epochs = {TRAIN_EPOCH}, batch size = 128")
         loss_fn = torch.nn.MSELoss() if VSA_MODE == "SOFTWARE" else torch.nn.BCEWithLogitsLoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-        train_dl = get_train_data(vsa)
-        train(train_dl, model, loss_fn, optimizer, num_epoch=TRAIN_EPOCH, device=device)
         cur_time_pst = datetime.now().astimezone(timezone('US/Pacific')).strftime("%m-%d-%H-%M")
-        model_weight_loc = os.path.join(test_dir(), f"model_weights_{MAX_NUM_OBJECTS}objs_{TRAIN_BATCH_SIZE}batch_{TRAIN_EPOCH}epoch_{NUM_TRAIN_SAMPLES}samples_{cur_time_pst}.pt")
+        train_dl = get_train_data(vsa)
+        final_loss = train(train_dl, model, loss_fn, optimizer, num_epoch=TRAIN_EPOCH, cur_time=cur_time_pst, device=device)
+        model_weight_loc = os.path.join(test_dir(), f"model_weights_{MAX_NUM_OBJECTS}objs_{TRAIN_BATCH_SIZE}batch_{TRAIN_EPOCH}epoch_{NUM_TRAIN_SAMPLES}samples_{final_loss}loss_{cur_time_pst}.pt")
         torch.save(model.state_dict(), model_weight_loc)
         print(f"Model weights saved to {model_weight_loc}")
 
@@ -355,7 +380,7 @@ if __name__ == "__main__":
 
         print(f"Resonator setup: type = {RESONATOR_TYPE}, normalize = {NORMALIZE}, activation = {ACTIVATION}, iterations = {NUM_ITERATIONS}")
 
-        test_dl, num_samples = get_test_data(vsa)
+        test_dl = get_test_data(vsa)
  
         if ALGO == "algo1":
             incorrect_count, unconverged = test_algo1(vsa, model, test_dl, device)
@@ -363,11 +388,16 @@ if __name__ == "__main__":
             incorrect_count, unconverged = test_algo2(vsa, model, test_dl, device)
 
         for i in range(MAX_NUM_OBJECTS):
-            print(f"{i+1} objects: Accuracy = {num_samples[i] - incorrect_count[i]}/{num_samples[i]}     Unconverged = {unconverged[i]}/{num_samples[i]}")
+            print(f"{i+1} objects: Accuracy = {NUM_TEST_SAMPLES//MAX_NUM_OBJECTS - incorrect_count[i]}/{NUM_TEST_SAMPLES//MAX_NUM_OBJECTS}     Unconverged = {unconverged[i]}/{NUM_TEST_SAMPLES//MAX_NUM_OBJECTS * (i+1)}")
 
     # Data Gen mode      
     else:
-        MultiConceptMNIST(test_dir(), vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True, algo=ALGO)
-        MultiConceptMNIST(test_dir(), vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True, algo=ALGO)
+        if ALGO == "algo1":
+            MultiConceptMNIST1(test_dir(), vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True)
+            MultiConceptMNIST1(test_dir(), vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True)
+        elif ALGO == "algo2":
+            MultiConceptMNIST2(test_dir(), vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True)
+            MultiConceptMNIST2(test_dir(), vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True)
+
     
 
