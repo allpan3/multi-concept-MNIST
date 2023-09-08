@@ -118,6 +118,8 @@ class MultiConceptMNIST(VisionDataset):
             n_obj = n + 1
             image_set, label_set = self.data_gen(self.num_samples[n], n_obj, raw_ds)
             torch.save(image_set, os.path.join(self.root, f"{type}-images-{n_obj}obj-{self.num_samples[n]}samples.pt"))
+            with open(os.path.join(self.root, f"{type}-labels-{n_obj}obj-{self.num_samples[n]}samples.json"), "w") as f:
+                json.dump(label_set, f)
             target_set = self.target_gen(label_set)
             torch.save(target_set, os.path.join(self.root, f"{type}-targets-{n_obj}obj-{self.num_samples[n]}samples.pt"))
             self.data += image_set
