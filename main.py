@@ -16,18 +16,18 @@ from datetime import datetime
 from pytz import timezone
 
 VERBOSE = 1
-RUN_MODE = "TEST" # "TRAIN", "TEST", "DATAGEN"
+RUN_MODE = "TRAIN" # "TRAIN", "TEST", "DATAGEN"
 ALGO = "algo2" # "algo1", "algo2"
 VSA_MODE = "HARDWARE" # "SOFTWARE", "HARDWARE"
-DIM = 2000
-MAX_NUM_OBJECTS = 2
+DIM = 5000
+MAX_NUM_OBJECTS = 3
 NUM_POS_X = 3
 NUM_POS_Y = 3
-NUM_COLOR = 3
+NUM_COLOR = 7
 # Train
-TRAIN_EPOCH = 50
+TRAIN_EPOCH = 20
 TRAIN_BATCH_SIZE = 128
-NUM_TRAIN_SAMPLES = 48000
+NUM_TRAIN_SAMPLES = 100000
 # Test
 TEST_BATCH_SIZE = 1
 NUM_TEST_SAMPLES = 300
@@ -37,7 +37,7 @@ ACTIVATION = "NONE"  # "NONE", "ABS", "NONNEG"
 RESONATOR_TYPE = "SEQUENTIAL" # "SEQUENTIAL", "CONCURRENT"
 NUM_ITERATIONS = 1000
 if VSA_MODE == "HARDWARE":
-    NORMALIZE = True # Normalization is forced to be applied in hardware mode
+    NORMALIZE = None # Normalization is forced to be applied in hardware mode
 
 test_dir = f"./tests/{VSA_MODE}-{DIM}dim-{MAX_NUM_OBJECTS}obj-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color/{ALGO}"
 
@@ -68,15 +68,16 @@ def train(dataloader, model, loss_fn, optimizer, num_epoch, cur_time, device = "
 
     return round(loss.item(), 4)
 
-
-def get_similarity(v1, v2):
+def get_similarity(v1, v2, norm=True):
     """
     Return the hamming similarity for normalized vectors, and cosine similarity for unnormalized vectors
     Hamming similarity is linear and should reflect the noise level
     Cosine similarity is non-linear and may not reflect the noise level
+    By default, always normalize the inputs vectors before comparison (only applies to software mode because
+    in hardware mode vectors are always normalized), but allow the option to disable it if that's desired
     """
     if VSA_MODE == "SOFTWARE":
-        if NORMALIZE:
+        if norm:
             # Compare the normalized vectors
             positive = torch.tensor(1, device=v1.device)
             negative = torch.tensor(-1, device=v1.device)
@@ -132,6 +133,8 @@ def test_algo1(vsa, model, test_dl, device):
     """
 
     def factorization(vsa, resonator_network, inputs, init_estimates, codebooks = None, orig_indices = None):
+        assert(VSA_MODE == "SOFTWARE")
+
         # The input vector is an integer vector. Subtract every object vector from the input vector
         # and feed to the resonator netowrk again to get the next vector
         result_set = [[] for _ in range(inputs.size(0))]
@@ -142,7 +145,7 @@ def test_algo1(vsa, model, test_dl, device):
         # Always try to extract MAX_NUM_OBJECTS objects
         for k in range(MAX_NUM_OBJECTS):
 
-            if NORMALIZE and VSA_MODE == "SOFTWARE":
+            if NORMALIZE:
                 inputs_ = vsa.normalize(inputs)
             else:
                 inputs_ = inputs
@@ -165,7 +168,7 @@ def test_algo1(vsa, model, test_dl, device):
                 if VSA_MODE == "SOFTWARE":
                     # Get the object vector and subtract it from the input
                     # Key must be a list of tuple
-                    object = vsa[[result[i]]]
+                    object = vsa.get_vector(result[i])
                     inputs[i] = inputs[i] - object
 
         return result_set, converg_set
@@ -174,7 +177,9 @@ def test_algo1(vsa, model, test_dl, device):
     rn = Resonator(vsa, type=RESONATOR_TYPE, activation=ACTIVATION, iterations=NUM_ITERATIONS, device=device)
 
     codebooks, orig_indices = rn.reorder_codebooks()
-    init_estimates = rn.get_init_estimates(codebooks, NORMALIZE, TEST_BATCH_SIZE)
+    init_estimates = rn.get_init_estimates(codebooks, TEST_BATCH_SIZE)
+    if NORMALIZE:
+        init_estimates = vsa.normalize(init_estimates)
 
     incorrect_count = [0] * MAX_NUM_OBJECTS
     unconverged = [[0,0] for _ in range(MAX_NUM_OBJECTS)]    # [correct, incorrect]
@@ -218,20 +223,20 @@ def test_algo1(vsa, model, test_dl, device):
                     unconverged[len(label)-1][0] += 1 if convergence[i][j] == NUM_ITERATIONS-1 else 0
 
                 # Collect per-object similarity
-                sim_per_obj.append(round(get_similarity(infer_result[i], vsa.lookup([label[j]])).item(), 3))
+                sim_per_obj.append(round(get_similarity(infer_result[i], vsa.lookup([label[j]]), NORMALIZE).item(), 3))
 
             if incorrect:
                 incorrect_count[len(label)-1] += 1 if incorrect else 0
                 if (VERBOSE >= 1):
                     print(Fore.BLUE + f"Test {n} Failed:      Convergence = {convergence[i]}" + Fore.RESET)
-                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i]).item()))
+                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], NORMALIZE).item()))
                     print("Per-object similarity = {}".format(sim_per_obj))
                     print(message[:-1])
                     print("Outcome = {}".format(outcomes[i][0: len(label)]))
             else:
                 if (VERBOSE >= 2):
                     print(Fore.BLUE + f"Test {n} Passed:      Convergence = {convergence[i]}" + Fore.RESET)
-                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i]).item()))
+                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], NORMALIZE).item()))
                     print("Per-object similarity = {}".format(sim_per_obj))
                     print(message[:-1])
             n += 1
@@ -246,8 +251,7 @@ def test_algo2(vsa, model, test_dl, device):
         converg_set = [[] for _ in range(inputs.size(0))]
 
         inputs = inputs.clone()
-        # In hardware mode the input is expected to be normalized already, so shouldn't do it here
-        if NORMALIZE and VSA_MODE == "SOFTWARE":
+        if NORMALIZE:
             inputs = vsa.normalize(inputs)
 
         for k in range(MAX_NUM_OBJECTS):
@@ -276,7 +280,9 @@ def test_algo2(vsa, model, test_dl, device):
     codebooks = vsa.codebooks[:-1]
 
     codebooks, orig_indices = rn.reorder_codebooks(codebooks)
-    init_estimates = rn.get_init_estimates(codebooks, NORMALIZE, TEST_BATCH_SIZE)
+    init_estimates = rn.get_init_estimates(codebooks, TEST_BATCH_SIZE)
+    if NORMALIZE:
+        init_estimates = vsa.normalize(init_estimates)
 
     incorrect_count = [0] * MAX_NUM_OBJECTS
     unconverged = [[0,0] for _ in range(MAX_NUM_OBJECTS)]    # [correct, incorrect]
@@ -322,20 +328,20 @@ def test_algo2(vsa, model, test_dl, device):
                     message += "Object {} is correctly detected.".format(label[j]) + "\n"
                     unconverged[len(label)-1][0] += 1 if convergence[i][j] == NUM_ITERATIONS-1 else 0
                 
-                sim_per_obj.append(round(get_similarity(infer_result[i], gt_objs[j]).item(), 3))
+                sim_per_obj.append(round(get_similarity(infer_result[i], gt_objs[j], NORMALIZE).item(), 3))
 
             if incorrect:
                 incorrect_count[len(label)-1] += 1 if incorrect else 0
                 if (VERBOSE >= 1):
                     print(Fore.BLUE + f"Test {n} Failed:      Convergence = {convergence[i]}" + Fore.RESET)
-                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i]).item()))
+                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], NORMALIZE).item()))
                     print("Per-object similarity = {}".format(sim_per_obj))
                     print(message[:-1])
                     print("Outcome = {}".format(outcomes[i][0: len(label)]))
             else:
                 if (VERBOSE >= 2):
                     print(Fore.BLUE + f"Test {n} Passed:      Convergence = {convergence[i]}" + Fore.RESET)
-                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i]).item()))
+                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], NORMALIZE).item()))
                     print("Per-object similarity = {}".format(sim_per_obj))
                     print(message[:-1])
             n += 1

@@ -31,7 +31,7 @@ class MultiConceptMNISTVSA1(VSA):
         key = []
         for i in range(len(label)):
             key.append((label[i]["pos_x"], label[i]["pos_y"], label[i]["color"], label[i]["digit"]))
-        return self.__getitem__(key)
+        return self.get_vector(key)
 
 
 class MultiConceptMNISTVSA2(VSA):
@@ -60,6 +60,9 @@ class MultiConceptMNISTVSA2(VSA):
         self.x_codebook = self.codebooks[0]
         self.y_codebook = self.codebooks[1]
 
+        # Construct priority list for sorting based on (x, y) locations
+        self.rule = [x for x in itertools.product(range(len(self.x_codebook)), range(len(self.y_codebook)))]
+
     def lookup(self, label: list, bundled: bool = True):
         '''
         `label` is a list of dict in [{'pos_x': int, 'pos_y': int, 'color': int, 'digit': int}, ...] format
@@ -72,14 +75,12 @@ class MultiConceptMNISTVSA2(VSA):
             key.append((label[i]["pos_x"], label[i]["pos_y"], label[i]["color"], label[i]["digit"]))
             
         # Get all objects (excluding ID)
-        objects = [self.__getitem__(key[j]) for j in range(len(key))]
+        objects = [self.get_vector(key[j]) for j in range(len(key))]
 
-        # Construct priority list for sorting based on (x, y) locations
-        rule = [x for x in itertools.product(range(len(self.x_codebook)), range(len(self.y_codebook)))]
         # Reorder the positions of the objects in each label in the ascending order of (x, y), the first two elements in the label
-        _, objects = list(zip(*sorted(zip(key, objects), key=lambda k: rule.index(k[0][0:2]))))
+        _, objects = list(zip(*sorted(zip(key, objects), key=lambda k: self.rule.index(k[0][0:2]))))
         # Remember the original indice of the codebooks for reordering later
-        indices = sorted(range(len(key)), key=lambda k: rule.index(key[k][0:2]))
+        indices = sorted(range(len(key)), key=lambda k: self.rule.index(key[k][0:2]))
         # Bind the vector with ID determined by the position in the list
         objects = [self.bind(objects[j], self.id_codebook[j]) for j in range(len(objects))]
         # Return to the original order (for similarity check)
