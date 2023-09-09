@@ -2,7 +2,7 @@
 import torch
 from model.vsa import MultiConceptMNISTVSA1, MultiConceptMNISTVSA2
 from vsa import Resonator
-from dataset import MultiConceptMNIST1, MultiConceptMNIST2
+from dataset import MultiConceptMNIST
 from torch.utils.data import DataLoader
 import torch
 from tqdm import tqdm
@@ -15,11 +15,11 @@ import os
 from datetime import datetime
 from pytz import timezone
 
-VERBOSE = 2
+VERBOSE = 1
 RUN_MODE = "TEST" # "TRAIN", "TEST", "DATAGEN"
 ALGO = "algo2" # "algo1", "algo2"
 VSA_MODE = "HARDWARE" # "SOFTWARE", "HARDWARE"
-DIM = 2000
+DIM = 5000
 MAX_NUM_OBJECTS = 2
 NUM_POS_X = 3
 NUM_POS_Y = 3
@@ -27,18 +27,19 @@ NUM_COLOR = 3
 # Train
 TRAIN_EPOCH = 20
 TRAIN_BATCH_SIZE = 128
-NUM_TRAIN_SAMPLES = 140000
+NUM_TRAIN_SAMPLES = 120000
 # Test
 TEST_BATCH_SIZE = 1
 NUM_TEST_SAMPLES = 300
 # Resonator
-NORMALIZE = False    # Only applies to SOFTWARE mode. This controls the normalization of the input and estimate vectors to the resonator network
+NORMALIZE = True    # Only applies to SOFTWARE mode. This controls the normalization of the input and estimate vectors to the resonator network
 ACTIVATION = "NONE"  # "NONE", "ABS", "NONNEG"
 RESONATOR_TYPE = "SEQUENTIAL" # "SEQUENTIAL", "CONCURRENT"
 NUM_ITERATIONS = 1000
 if VSA_MODE == "HARDWARE":
     NORMALIZE = True # Normalization is forced to be applied in hardware mode
 
+test_dir = f"./tests/{VSA_MODE}-{DIM}dim-{MAX_NUM_OBJECTS}obj-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color/{ALGO}"
 
 def collate_fn(batch):
     imgs = torch.stack([x[0] for x in batch], dim=0)
@@ -69,49 +70,45 @@ def train(dataloader, model, loss_fn, optimizer, num_epoch, cur_time, device = "
 
 
 def get_similarity(v1, v2):
+    """
+    Return the hamming similarity for normalized vectors, and cosine similarity for unnormalized vectors
+    Hamming similarity is linear and should reflect the noise level
+    Cosine similarity is non-linear and may not reflect the noise level
+    """
     if VSA_MODE == "SOFTWARE":
-        dtype = torch.get_default_dtype()
-        self_dot = torch.sum(v1 * v1, dim=-1, dtype=dtype)
-        self_mag = torch.sqrt(self_dot)
-        others_dot = torch.sum(v2 * v2, dim=-1, dtype=dtype)
-        others_mag = torch.sqrt(others_dot)
-        magnitude = self_mag * others_mag
-        magnitude = torch.clamp(magnitude, min=1e-08)
-        return torch.matmul(v1.type(torch.float32), v2.type(torch.float32)) / magnitude
+        if NORMALIZE:
+            # Compare the normalized vectors
+            positive = torch.tensor(1, device=v1.device)
+            negative = torch.tensor(-1, device=v1.device)
+            v1_ = torch.where(v1 >= 0, positive, negative)
+            v2_ = torch.where(v2 >= 0, positive, negative)
+            return torch.sum(torch.where(v1_ == v2_, 1, 0), dim=-1) / DIM
+        else:
+            v1_dot = torch.sum(v1 * v1, dim=-1)
+            v1_mag = torch.sqrt(v1_dot)
+            v2_dot = torch.sum(v2 * v2, dim=-1)
+            v2_mag = torch.sqrt(v2_dot)
+            magnitude = v1_mag * v2_mag
+            magnitude = torch.clamp(magnitude, min=1e-08)
+            return torch.matmul(v1.type(torch.float32), v2.type(torch.float32)) / magnitude
     else:
-        return torch.sum(torch.where(v1 == v2, 1, -1), dim=-1) / DIM
-
-
-def test_dir():
-    if ALGO == "algo1":
-        return f"./tests/algo1/{VSA_MODE}-{DIM}dim-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color"
-    elif ALGO == "algo2":
-        return f"./tests/algo2/{VSA_MODE}-{DIM}dim-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color"
-    
+        return torch.sum(torch.where(v1 == v2, 1, 0), dim=-1) / DIM
 
 def get_vsa():
     if ALGO == "algo1":
-        vsa = MultiConceptMNISTVSA1(test_dir(), model=VSA_MODE, dim=DIM, max_num_objects=MAX_NUM_OBJECTS, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, seed=0, device=device)
+        vsa = MultiConceptMNISTVSA1(test_dir, model=VSA_MODE, dim=DIM, max_num_objects=MAX_NUM_OBJECTS, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, seed=0, device=device)
     elif ALGO == "algo2":
-        vsa = MultiConceptMNISTVSA2(test_dir(), model=VSA_MODE, dim=DIM, max_num_objects=MAX_NUM_OBJECTS, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, seed=0, device=device)
+        vsa = MultiConceptMNISTVSA2(test_dir, model=VSA_MODE, dim=DIM, max_num_objects=MAX_NUM_OBJECTS, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, seed=0, device=device)
     return vsa
 
 
 def get_train_data(vsa):
-    if ALGO == "algo1":
-        train_ds = MultiConceptMNIST1(test_dir(), vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
-    elif ALGO == "algo2":
-        train_ds = MultiConceptMNIST2(test_dir(), vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
-
+    train_ds = MultiConceptMNIST(test_dir, vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
     train_dl = DataLoader(train_ds, batch_size=TRAIN_BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
     return train_dl
 
 def get_test_data(vsa):
-    if ALGO == "algo1":
-        test_ds = MultiConceptMNIST2(test_dir(), vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
-    elif ALGO == "algo2":
-        test_ds = MultiConceptMNIST2(test_dir(), vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
-
+    test_ds = MultiConceptMNIST(test_dir, vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
     test_dl = DataLoader(test_ds, batch_size=TEST_BATCH_SIZE, shuffle=False, collate_fn=collate_fn)
     return test_dl
 
@@ -244,7 +241,7 @@ def test_algo1(vsa, model, test_dl, device):
 
 def test_algo2(vsa, model, test_dl, device):
 
-    def factorization(vsa, resonator_network, inputs, init_estimates, id_codebook, codebooks, orig_indices = None):
+    def factorization(vsa, resonator_network, inputs, init_estimates, codebooks, orig_indices = None):
         result_set = [[] for _ in range(inputs.size(0))]
         converg_set = [[] for _ in range(inputs.size(0))]
 
@@ -255,7 +252,7 @@ def test_algo2(vsa, model, test_dl, device):
 
         for k in range(MAX_NUM_OBJECTS):
             # Manually unbind ID 
-            inputs_ = vsa.bind(inputs, id_codebook[k])
+            inputs_ = vsa.bind(inputs, vsa.id_codebook[k])
 
             # Run resonator network
             result, convergence = resonator_network(inputs_, init_estimates, codebooks, orig_indices)
@@ -277,7 +274,6 @@ def test_algo2(vsa, model, test_dl, device):
 
     # Remove the ID codebook since it is manually unbound
     codebooks = vsa.codebooks[:-1]
-    id_cb = vsa.id_codebook
 
     codebooks, orig_indices = rn.reorder_codebooks(codebooks)
     init_estimates = rn.get_init_estimates(codebooks, NORMALIZE, TEST_BATCH_SIZE)
@@ -301,7 +297,7 @@ def test_algo2(vsa, model, test_dl, device):
             infer_result = torch.sigmoid(infer_result).round().type(torch.int8)
 
         # Factorization
-        outcomes, convergence = factorization(vsa, rn, infer_result, init_estimates, id_cb, codebooks, orig_indices)
+        outcomes, convergence = factorization(vsa, rn, infer_result, init_estimates, codebooks, orig_indices)
 
         # Compare results
         # Batch: multiple samples
@@ -310,6 +306,9 @@ def test_algo2(vsa, model, test_dl, device):
             message = ""
             label = labels[i]
             sim_per_obj = []
+
+            # Must look up the entire label (instead of one object at a time) together to get the correct reordering done
+            gt_objs = vsa.lookup(label, bundled=False)
 
             # Sample: multiple objects
             for j in range(len(label)):
@@ -323,9 +322,7 @@ def test_algo2(vsa, model, test_dl, device):
                     message += "Object {} is correctly detected.".format(label[j]) + "\n"
                     unconverged[len(label)-1][0] += 1 if convergence[i][j] == NUM_ITERATIONS-1 else 0
                 
-                # Collect per-object similarity: compare the result unbound the ID with the groudtruth vector unbound the ID
-                # This is the actual vector used for factorization
-                sim_per_obj.append(round(get_similarity(vsa.bind(infer_result[i], id_cb[j]), vsa.lookup([label[j]], with_id=False)).item(), 3))
+                sim_per_obj.append(round(get_similarity(infer_result[i], gt_objs[j]).item(), 3))
 
             if incorrect:
                 incorrect_count[len(label)-1] += 1 if incorrect else 0
@@ -360,7 +357,7 @@ if __name__ == "__main__":
         cur_time_pst = datetime.now().astimezone(timezone('US/Pacific')).strftime("%m-%d-%H-%M")
         train_dl = get_train_data(vsa)
         final_loss = train(train_dl, model, loss_fn, optimizer, num_epoch=TRAIN_EPOCH, cur_time=cur_time_pst, device=device)
-        model_weight_loc = os.path.join(test_dir(), f"model_weights_{MAX_NUM_OBJECTS}objs_{TRAIN_BATCH_SIZE}batch_{TRAIN_EPOCH}epoch_{NUM_TRAIN_SAMPLES}samples_{final_loss}loss_{cur_time_pst}.pt")
+        model_weight_loc = os.path.join(test_dir, f"model_weights_{MAX_NUM_OBJECTS}objs_{TRAIN_BATCH_SIZE}batch_{TRAIN_EPOCH}epoch_{NUM_TRAIN_SAMPLES}samples_{final_loss}loss_{cur_time_pst}.pt")
         torch.save(model.state_dict(), model_weight_loc)
         print(f"Model weights saved to {model_weight_loc}")
 
@@ -392,12 +389,8 @@ if __name__ == "__main__":
 
     # Data Gen mode      
     else:
-        if ALGO == "algo1":
-            MultiConceptMNIST1(test_dir(), vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True)
-            MultiConceptMNIST1(test_dir(), vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True)
-        elif ALGO == "algo2":
-            MultiConceptMNIST2(test_dir(), vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True)
-            MultiConceptMNIST2(test_dir(), vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True)
+        MultiConceptMNIST(test_dir, vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True)
+        MultiConceptMNIST(test_dir, vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True)
 
     
 
