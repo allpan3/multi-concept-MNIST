@@ -10,6 +10,8 @@ import json
 import os
 from vsa import VSA
 from typing import Callable, Optional
+import itertools
+from tqdm import tqdm
 
 class MultiConceptMNIST(VisionDataset):
 
@@ -116,11 +118,16 @@ class MultiConceptMNIST(VisionDataset):
         for n in range(self.max_num_objects):
             n_obj = n + 1
             image_set, label_set = self.data_gen(self.num_samples[n], n_obj, raw_ds)
+            print("Saving images...", end="", flush=True)
             torch.save(image_set, os.path.join(self.root, f"{type}-images-{n_obj}obj-{self.num_samples[n]}samples.pt"))
+            print("Done. Saving labels...", end="", flush=True)
             with open(os.path.join(self.root, f"{type}-labels-{n_obj}obj-{self.num_samples[n]}samples.json"), "w") as f:
                 json.dump(label_set, f)
+            print("Done.")
             target_set = self.target_gen(label_set)
+            print("Saving targets...", end="", flush=True)
             torch.save(target_set, os.path.join(self.root, f"{type}-targets-{n_obj}obj-{self.num_samples[n]}samples.pt"))
+            print("Done.")
             self.data += image_set
             self.labels += label_set
             self.targets += target_set
@@ -130,7 +137,7 @@ class MultiConceptMNIST(VisionDataset):
         label_set_uni = set() # Check the coverage of generation
         label_set = []
 
-        for i in range(num_samples):
+        for i in tqdm(range(num_samples), desc=f"Generating {num_samples} samples of {num_objs}-object images", leave=False):
             # num_pos_x by num_pos_y grid, each grid 28x28 pixels, color (3-dim uint8 tuple)
             # [H, W, C]
             image_tensor = torch.zeros(28*self.num_pos_y, 28*self.num_pos_x, 3, dtype=torch.uint8)
@@ -138,30 +145,27 @@ class MultiConceptMNIST(VisionDataset):
             label_uni = set() # Check the coverage of generation
 
             # one object max per position
-            pos = set()
+            all_pos = [x for x in itertools.product(range(self.num_pos_x), range(self.num_pos_y))]
             for j in range(num_objs):
-                while True:
-                    pos_x = random.randint(0, self.num_pos_x-1)
-                    pos_y = random.randint(0, self.num_pos_y-1)
-                    if (pos_x, pos_y) not in pos:
-                        pos.add((pos_x, pos_y))
-                        break
+                pick = random.randint(0,len(all_pos)-1)
+                pos_x, pos_y = all_pos.pop(pick)
                 color_idx = random.randint(0, self.num_colors-1)
                 mnist_idx = random.randint(0, 59999 if raw_ds.train else 9999)
                 digit_image = raw_ds.data[mnist_idx, :, :]
                 for k in self.COLOR_SET[color_idx]:
                     image_tensor[pos_y*28:(pos_y+1)*28, pos_x*28:(pos_x+1)*28, k] = digit_image
+                digit = raw_ds.targets[mnist_idx].item()
                 
                 object = {
                     "pos_x": pos_x, 
                     "pos_y": pos_y,
                     "color": color_idx,
-                    "digit": raw_ds.targets[mnist_idx].item()
+                    "digit": digit
                 }
 
                 label.append(object)
                 # For coverage check. Since pos is checked to be unique, objects are unique
-                label_uni.add((pos_x, pos_y, color_idx, raw_ds.targets[mnist_idx].item()))
+                label_uni.add((pos_x, pos_y, color_idx, digit))
 
             # For coverage check, convert to tuple to make it hashable and unordered
             label_set_uni.add(tuple(label_uni)) 
@@ -177,7 +181,7 @@ class MultiConceptMNIST(VisionDataset):
                 label_set = json.load(f)
         
         target_set = []
-        for label in label_set:
+        for label in tqdm(label_set, desc=f"Generating targets for {len(label_set[0])}-object images", leave=False):
             target_set.append(self.vsa.lookup(label))
         return target_set
  
