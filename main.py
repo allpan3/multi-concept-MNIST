@@ -16,7 +16,7 @@ from datetime import datetime
 from pytz import timezone
 
 VERBOSE = 2
-RUN_MODE = "TRAIN" # "TRAIN", "TEST", "DATAGEN"
+RUN_MODE = "TEST" # "TRAIN", "TEST", "DATAGEN"
 ALGO = "algo2"
 VSA_MODE = "HARDWARE" # "SOFTWARE", "HARDWARE"
 DIM = 2000
@@ -25,9 +25,9 @@ NUM_POS_X = 3
 NUM_POS_Y = 3
 NUM_COLOR = 3
 # Train
-TRAIN_EPOCH = 20
+TRAIN_EPOCH = 50
 TRAIN_BATCH_SIZE = 128
-NUM_TRAIN_SAMPLES = 120000
+NUM_TRAIN_SAMPLES = 48000
 # Test
 TEST_BATCH_SIZE = 1
 NUM_TEST_SAMPLES = 300
@@ -47,7 +47,8 @@ def collate_fn(batch):
     return imgs, labels, targets
 
 def train(dataloader, model, loss_fn, optimizer, num_epoch=1, device = "cpu"):
-    writer = SummaryWriter(log_dir=f"./runs/{ALGO}-{VSA_MODE}-{DIM}dim-{MAX_NUM_OBJECTS}objs-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color", filename_suffix=f"{TRAIN_BATCH_SIZE}batch-{TRAIN_EPOCH}epoch-{NUM_TRAIN_SAMPLES}samples")
+    cur_time_pst = datetime.now().astimezone(timezone('US/Pacific')).strftime("%m-%d-%H-%M")
+    writer = SummaryWriter(log_dir=f"./runs/{ALGO}-{VSA_MODE}-{DIM}dim-{MAX_NUM_OBJECTS}objs-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color_{cur_time_pst}", filename_suffix=f"{TRAIN_BATCH_SIZE}batch-{TRAIN_EPOCH}epoch-{NUM_TRAIN_SAMPLES}samples")
     # images in tensor([B, H, W, C])
     # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
     # targets in VSATensor([B, D])
@@ -331,7 +332,8 @@ if __name__ == "__main__":
     if RUN_MODE == "TRAIN":
         print(f"Training on {device}: samples = {NUM_TRAIN_SAMPLES}, epochs = {TRAIN_EPOCH}, batch size = 128")
         loss_fn = torch.nn.MSELoss() if VSA_MODE == "SOFTWARE" else torch.nn.BCEWithLogitsLoss()
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+        # loss_fn = torch.nn.MSELoss()
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
         train_dl = get_train_data(vsa)
         train(train_dl, model, loss_fn, optimizer, num_epoch=TRAIN_EPOCH, device=device)
         cur_time_pst = datetime.now().astimezone(timezone('US/Pacific')).strftime("%m-%d-%H-%M")

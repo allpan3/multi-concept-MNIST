@@ -4,14 +4,14 @@ from model.common import get_resnet18_model
 class MultiConceptNonDecomposed(nn.Module):
     def __init__(self, dim, device = "cpu"):
         super(MultiConceptNonDecomposed, self).__init__()
-        self.model = get_resnet18_model(dim=2048)
+        self.model = get_resnet18_model(dim=dim * 2)
         self.output = nn.Sequential(
             nn.ReLU(),
-            nn.Linear(2048, 1536),
+            nn.Linear(dim*2, int(dim*1.5)),
             nn.ReLU(),
-            nn.Linear(1536, 1024),
+            nn.Linear(int(dim*1.5), dim),
             nn.ReLU(),
-            nn.Linear(1024, dim),
+            nn.Linear(dim, dim),
         )
         self.device = device
         self.to(device)
