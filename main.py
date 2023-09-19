@@ -95,7 +95,7 @@ def get_similarity(v1, v2, norm=True):
     else:
         return torch.sum(torch.where(v1 == v2, 1, 0), dim=-1) / DIM
 
-def get_vsa():
+def get_vsa(device):
     if ALGO == "algo1":
         vsa = MultiConceptMNISTVSA1(test_dir, model=VSA_MODE, dim=DIM, max_num_objects=MAX_NUM_OBJECTS, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, seed=0, device=device)
     elif ALGO == "algo2":
