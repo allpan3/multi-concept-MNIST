@@ -1,7 +1,8 @@
 import numpy as np
-from main import DIM, get_train_data, get_vsa
+from main import DIM, get_test_data, get_vsa
 from model.nn_non_decomposed import MultiConceptNonDecomposed
 import torch
+import torchvision
 from typing import List, Tuple
 from torch import nn
 
@@ -175,7 +176,7 @@ def quantize_activations(model: nn.Module):
 
         # Add this code just in case
         if (result < -128).any() or (result > 127).any():
-            raise Exception("Input to {} layer is out of bounds for an 8-bit signed integer".format(l.__class__.__name__))
+            raise Exception("Input to the input {} layer is out of bounds for an 8-bit signed integer".format(l.__class__.__name__))
         if (result != result.round()).any():
             raise Exception("Input to {} layer has non-integer values".format(l.__class__.__name__))
 
@@ -189,9 +190,11 @@ def quantize_activations(model: nn.Module):
     def make_output_scaling_hook(layer: nn.Module):
         def output_scaling_hook(layer: nn.Module, x, y):
             result = torch.clamp(y * layer.output_scale, min=-128, max=127).round()
-
+            # layer.saved = [x[0].clone(), y.clone(), result.clone()]
             x = x[0]
+            # import pdb; pdb.set_trace()
             if (x < -128).any() or (x > 127).any():
+                # import pdb; pdb.set_trace()
                 raise Exception("Input to {} layer is out of bounds for an 8-bit signed integer".format(layer.__class__.__name__))
             if (x != x.round()).any():
                 raise Exception("Input to {} layer has non-integer values".format(layer.__class__.__name__))
@@ -204,6 +207,16 @@ def quantize_activations(model: nn.Module):
         layer.output_scale = activation_scale(act, layer.weight.scale, model.input_scale, preceding_layer_scales)
         layer.register_forward_hook(make_output_scaling_hook(layer))
         preceding_layer_scales.append((layer.weight.scale, layer.output_scale))
+    
+    # bn_relu_layers = [child for child in flattened_children(model) if isinstance(child, nn.BatchNorm2d) or isinstance(child, nn.ReLU)]
+    # # This is added for due to potential numerical instability
+    # def output_scaling_hook_bn_relu(layer: nn.Module, x, y):
+    #     result = torch.clamp(y, min=-128, max=127).round()
+    #     # layer.saved = [x[0].clone(), y.clone(), result.clone()]
+    #     return result
+    # for layer in bn_relu_layers:
+    #     layer.register_forward_hook(output_scaling_hook_bn_relu)
+
 
 def register_activation_profiling_hooks(model: nn.Module):
     model.activations = []
@@ -239,7 +252,67 @@ def register_activation_profiling_hooks(model: nn.Module):
     
     return remove_all_handles
 
-def test(model, dataloader, max_iter=1):
+def quantized_bias(bias: torch.Tensor, n_w: float, n_initial_input: float, ns: List[Tuple[float, float]]) -> torch.Tensor:
+    '''
+    Quantize the weights so that all values are integers between -128 and 127.
+
+    Parameters:
+    bias (Tensor): The floating point values of the bias
+    n_w (float): The scale by which the weights of this layer were multiplied
+    n_initial_input (float): The scale by which the initial input to the neural network was multiplied
+    ns ([(float, float)]): A list of tuples, where each tuple represents the "weight scale" and "output scale" (in that order) for every preceding layer
+
+    Returns:
+    Tensor: The bias in quantized form, where every value is an integer between -128 and 127.
+            The "dtype" will still be "float", but the values themselves should all be integers.
+    '''
+
+    scale = n_initial_input
+
+    for nw, nout in ns:
+        scale *= nw * nout
+
+    scale *= n_w
+
+    return torch.clamp(bias * scale, min=-2147483648, max=2147483647).round(), scale
+
+def quantize_layer_biases(model: nn.Module):
+    preceding_layer_scales = []
+
+    for layer in flattened_children(model):
+        if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
+            # print(layer)
+
+            if layer.bias is not None:
+                q_layer_data, scale = quantized_bias(layer.bias.data, layer.weight.scale, model.input_scale, preceding_layer_scales)
+                q_layer_data = q_layer_data.to(device)
+
+                layer.bias.data = q_layer_data
+                layer.bias.scale = scale
+
+                if (q_layer_data < -2147483648).any() or (q_layer_data > 2147483647).any():
+                    raise Exception("Quantized bias of {} layer include values out of bounds for a 32-bit signed integer".format(layer.__class__.__name__))
+                if (q_layer_data != q_layer_data.round()).any():
+                    raise Exception("Quantized bias of {} layer include non-integer values".format(layer.__class__.__name__))
+
+            preceding_layer_scales.append((layer.weight.scale, layer.output_scale))
+
+def quantize_bottleneck_layers(model: nn.Module):
+    for child in model.modules():
+        if isinstance(child, torchvision.models.resnet.Bottleneck):
+            if hasattr(child, "quantized") and child.quantized:
+                raise Exception("bottleneck ALREADY quantized")
+            child.quantized = True
+
+            child.register_forward_hook(lambda layer, x, y: torch.clamp(y, min=-128, max=127))
+        elif isinstance(child, torchvision.models.resnet.BasicBlock):
+            raise Exception("basic blocks not yet quantized")
+
+def quantize_averaging_layer(model: nn.Module):
+    # Quantize outputs of averaging layer
+    model.model.fc.register_forward_pre_hook(lambda layer, x: x[0].round())
+
+def test(model, dataloader, max_iter=40):
     for idx, (images, _, _) in enumerate(dataloader):
         images = images.to(device)
         images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
@@ -251,7 +324,7 @@ def test(model, dataloader, max_iter=1):
 if __name__ == "__main__":
     model = get_model()
     vsa = get_vsa(device)
-    train_dl = get_train_data(vsa)
+    train_dl = get_test_data(vsa)
     model.eval()
     sample_input = torch.ones(1,3,25,25, device=device)
     print(model(sample_input))
@@ -266,4 +339,13 @@ if __name__ == "__main__":
     quantize_layer_weights(model)
     print("Quantize activations")
     quantize_activations(model)
+    print("Quantize bottleneck layers")
+    quantize_bottleneck_layers(model)
+    print("Quantize averaging layer")
+    quantize_averaging_layer(model)
+    print("Quantize biases")
+    quantize_layer_biases(model)
+    print(model(sample_input))
+    # import pdb; pdb.set_trace()
+
     # print(model)
