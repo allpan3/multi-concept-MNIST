@@ -8,16 +8,18 @@ class MultiConceptMNISTVSA1(VSA):
     def __init__(
             self,
             root: str,
-            model: Literal['SOFTWARE', 'HARDWARE'] = 'SOFTWARE',
+            mode: Literal['SOFTWARE', 'HARDWARE'] = 'SOFTWARE',
             dim: int = 2048,
             max_num_objects = 3,
             num_pos_x = 3,
             num_pos_y = 3,
             num_colors = 7,
+            ehd_bits = 8,
+            sim_bits = 13,
             seed: None or int = None,  # random seed
             device = "cpu"):
 
-        super().__init__(root, model, dim, num_factors = 4, num_codevectors = (num_pos_x, num_pos_y, num_colors, 10), seed = seed, device = device)
+        super().__init__(root, mode, dim, num_factors = 4, num_codevectors = (num_pos_x, num_pos_y, num_colors, 10), ehd_bits = ehd_bits, sim_bits = sim_bits, seed = seed, device = device)
 
         self.num_pos_x = num_pos_x
         self.num_pos_y = num_pos_y
@@ -31,7 +33,7 @@ class MultiConceptMNISTVSA1(VSA):
         key = []
         for i in range(len(label)):
             key.append((label[i]["pos_x"], label[i]["pos_y"], label[i]["color"], label[i]["digit"]))
-        return self.get_vector(key)
+        return self.get_vector(key, quantize=False)
 
 
 class MultiConceptMNISTVSA2(VSA):
@@ -39,12 +41,14 @@ class MultiConceptMNISTVSA2(VSA):
     def __init__(
         self,
         root: str,
-        model: Literal['SOFTWARE', 'HARDWARE'] = 'SOFTWARE',
+        mode: Literal['SOFTWARE', 'HARDWARE'] = 'SOFTWARE',
         dim: int = 2048,
         max_num_objects = 3,
         num_pos_x = 3,
         num_pos_y = 3,
         num_colors = 7,
+        ehd_bits = 8,
+        sim_bits = 13,
         seed: None or int = None,  # random seed
         device = "cpu"):
 
@@ -53,8 +57,7 @@ class MultiConceptMNISTVSA2(VSA):
         self.num_pos_x = num_pos_x
         self.num_pos_y = num_pos_y
         self.num_colors = num_colors
-
-        super().__init__(root, model, dim, num_factors = 5, num_codevectors = (num_pos_x, num_pos_y, num_colors, 10, self.num_id), seed = seed, device = device)
+        super().__init__(root, mode, dim, num_factors = 5, num_codevectors = (num_pos_x, num_pos_y, num_colors, 10, self.num_id), ehd_bits = ehd_bits, sim_bits = sim_bits, seed = seed, device = device)
 
         self.id_codebook = self.codebooks[-1]
         self.x_codebook = self.codebooks[0]
@@ -75,7 +78,7 @@ class MultiConceptMNISTVSA2(VSA):
             key.append((label[i]["pos_x"], label[i]["pos_y"], label[i]["color"], label[i]["digit"]))
             
         # Get all objects (excluding ID)
-        objects = [self.get_vector(key[j]) for j in range(len(key))]
+        objects = [self.get_vector(key[j], quantize=True) for j in range(len(key))]
 
         # Reorder the positions of the objects in each label in the ascending order of (x, y), the first two elements in the label
         _, objects = list(zip(*sorted(zip(key, objects), key=lambda k: self.rule.index(k[0][0:2]))))
