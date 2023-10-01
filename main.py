@@ -14,16 +14,22 @@ import sys
 import os
 from datetime import datetime
 from pytz import timezone
-
+###########
+# Configs #
+###########
 VERBOSE = 1
+SEED = None
 RUN_MODE = "TRAIN" # "TRAIN", "TEST", "DATAGEN"
-ALGO = "algo2" # "algo1", "algo2"
+ALGO = "algo1" # "algo1", "algo2"
 VSA_MODE = "HARDWARE" # "SOFTWARE", "HARDWARE"
-DIM = 5000
+DIM = 1024
 MAX_NUM_OBJECTS = 3
 NUM_POS_X = 3
 NUM_POS_Y = 3
 NUM_COLOR = 7
+# Hardware config
+EHD_BITS = 8
+SIM_BITS = 13
 # Train
 TRAIN_EPOCH = 20
 TRAIN_BATCH_SIZE = 128
@@ -32,12 +38,33 @@ NUM_TRAIN_SAMPLES = 100000
 TEST_BATCH_SIZE = 1
 NUM_TEST_SAMPLES = 300
 # Resonator
-NORMALIZE = True    # Only applies to SOFTWARE mode. This controls the normalization of the input and estimate vectors to the resonator network
-ACTIVATION = "NONE"  # "NONE", "ABS", "NONNEG"
 RESONATOR_TYPE = "SEQUENTIAL" # "SEQUENTIAL", "CONCURRENT"
-NUM_ITERATIONS = 1000
-if VSA_MODE == "HARDWARE":
-    NORMALIZE = None # Normalization is forced to be applied in hardware mode
+MAX_TRIALS = 20
+NUM_ITERATIONS = 2000
+ACTIVATION = 'THRESH_AND_SCALE'      # 'IDENTITY', 'THRESHOLD', 'SCALEDOWN', "THRESH_AND_SCALE"
+ACT_VALUE = 32
+STOCHASTICITY = "SIMILARITY"  # apply stochasticity: "NONE", "SIMILARITY", "VECTOR"
+RANDOMNESS = 0.03
+SIM_EXPLAIN_THRESHOLD = 0.15
+SIM_DETECT_THRESHOLD = 0.08
+ENERGY_THRESHOLD = 0.22
+EARLY_CONVERGE = 0.6
+
+# In hardware mode, the activation value needs to be a power of two
+if VSA_MODE == "HARDWARE" and (ACTIVATION == "SCALEDOWN" or ACTIVATION == "THRESH_AND_SCALE"):
+    def biggest_power_two(n):
+        """Returns the biggest power of two <= n"""
+        # if n is a power of two simply return it
+        if not (n & (n - 1)):
+            return n
+        # else set only the most significant bit
+        return int("1" + (len(bin(n)) - 3) * "0", 2)
+    ACT_VALUE = biggest_power_two(ACT_VALUE)
+
+# If activation is scaledown, then the early convergence threshold needs to scale down accordingly
+if EARLY_CONVERGE is not None and (ACTIVATION == "SCALEDOWN" or ACTIVATION == "THRESHOLDED_SCALEDOWN"):
+    EARLY_CONVERGE = EARLY_CONVERGE / ACT_VALUE
+
 
 test_dir = f"./tests/{VSA_MODE}-{DIM}dim-{MAX_NUM_OBJECTS}obj-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color/{ALGO}"
 
@@ -68,23 +95,27 @@ def train(dataloader, model, loss_fn, optimizer, num_epoch, cur_time, device = "
 
     return round(loss.item(), 4)
 
-def get_similarity(v1, v2, norm=True):
+def get_similarity(v1, v2, quantized):
     """
-    Return the hamming similarity for normalized vectors, and cosine similarity for unnormalized vectors
+    Return the hamming similarity for quantized vectors, and cosine similarity for unquantized vectors
     Hamming similarity is linear and should reflect the noise level
     Cosine similarity is non-linear and may not reflect the noise level
-    By default, always normalize the inputs vectors before comparison (only applies to software mode because
-    in hardware mode vectors are always normalized), but allow the option to disable it if that's desired
     """
-    if VSA_MODE == "SOFTWARE":
-        if norm:
-            # Compare the normalized vectors
+    if quantized:
+        if VSA_MODE == "SOFTWARE":
+            # Compare the quantized vectors
             positive = torch.tensor(1, device=v1.device)
             negative = torch.tensor(-1, device=v1.device)
             v1_ = torch.where(v1 >= 0, positive, negative)
             v2_ = torch.where(v2 >= 0, positive, negative)
             return torch.sum(torch.where(v1_ == v2_, 1, 0), dim=-1) / DIM
         else:
+            positive = torch.tensor(1, device=v1.device)
+            negative = torch.tensor(0, device=v1.device)
+            v1_ = torch.where(v1 >= 0, positive, negative)
+            v2_ = torch.where(v2 >= 0, positive, negative)
+            return torch.sum(torch.where(v1 == v2, 1, 0), dim=-1) / DIM
+    else:
             v1_dot = torch.sum(v1 * v1, dim=-1)
             v1_mag = torch.sqrt(v1_dot)
             v2_dot = torch.sum(v2 * v2, dim=-1)
@@ -92,16 +123,13 @@ def get_similarity(v1, v2, norm=True):
             magnitude = v1_mag * v2_mag
             magnitude = torch.clamp(magnitude, min=1e-08)
             return torch.matmul(v1.type(torch.float32), v2.type(torch.float32)) / magnitude
-    else:
-        return torch.sum(torch.where(v1 == v2, 1, 0), dim=-1) / DIM
-
+            
 def get_vsa(device):
     if ALGO == "algo1":
-        vsa = MultiConceptMNISTVSA1(test_dir, model=VSA_MODE, dim=DIM, max_num_objects=MAX_NUM_OBJECTS, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, seed=0, device=device)
+        vsa = MultiConceptMNISTVSA1(test_dir, mode=VSA_MODE, dim=DIM, max_num_objects=MAX_NUM_OBJECTS, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, ehd_bits=EHD_BITS, sim_bits=SIM_BITS, seed=SEED, device=device)
     elif ALGO == "algo2":
-        vsa = MultiConceptMNISTVSA2(test_dir, model=VSA_MODE, dim=DIM, max_num_objects=MAX_NUM_OBJECTS, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, seed=0, device=device)
+        vsa = MultiConceptMNISTVSA2(test_dir, mode=VSA_MODE, dim=DIM, max_num_objects=MAX_NUM_OBJECTS, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, ehd_bits=EHD_BITS, sim_bits=SIM_BITS, seed=SEED, device=device)
     return vsa
-
 
 def get_train_data(vsa):
     train_ds = MultiConceptMNIST(test_dir, vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
@@ -116,75 +144,75 @@ def get_test_data(vsa):
 
 def test_algo1(vsa, model, test_dl, device):
     """
-    Algorithm 1
-    The input vector is an un-normalized integer vector. After an object is extracted, it is
-    subtracted from the input integer vector. The updated vector goes through the resonator network
-    again to extract the next object.
-    Since the input vector is expected to be un-normalized (except when there's only one object),
-    this algorithm cannot extract more than 1 object when running in hardware mode, as the vectors
-    are automatically normalized after bundling. The NN model would be trained with normalized vectors.
-        This should be fixable, but may not be useful as it will require the NN model to be trained
-        with bipolarized vectors, which is exactly the same as in the software mode. So we can just 
-        use the NN model trained in software mode and binarize to 1/0 instead of 1/-1 before factorization
-        in real hardware.
-
-    Note we can still normalize the input and estimate vectors (controlled by NORMALIZE flag), but
-    the NN model should be trained with un-normalized vectors in this algorithm.
+    Algorithm 1: explain away
+    See VSA-factorization repo for details
+    NN needs to be trained with unquantized vectors
     """
 
-    def factorization(vsa, resonator_network, inputs, init_estimates, codebooks = None, orig_indices = None):
-        assert(VSA_MODE == "SOFTWARE")
+    def factorization(vsa, rn, inputs, init_estimates):
 
-        # The input vector is an integer vector. Subtract every object vector from the input vector
-        # and feed to the resonator netowrk again to get the next vector
-        result_set = [[] for _ in range(inputs.size(0))]
-        converg_set = [[] for _ in range(inputs.size(0))]
+        outcomes = [[] for _ in range(inputs.size(0))]  # num of batches
+        unconverged = [0] * inputs.size(0)
+        iters = [[] for _ in range(inputs.size(0))]
+        sim_to_remain = [[] for _ in range(inputs.size(0))]
+        sim_to_orig = [[] for _ in range(inputs.size(0))]
 
         inputs = inputs.clone()
+        inputs_q = vsa.quantize(inputs)
+        init_estimates = init_estimates.clone()
 
-        # Always try to extract MAX_NUM_OBJECTS objects
-        for k in range(MAX_NUM_OBJECTS):
+        for k in range(MAX_TRIALS):
+            inputs_ = vsa.quantize(inputs)
 
-            if NORMALIZE:
-                inputs_ = vsa.normalize(inputs)
-            else:
-                inputs_ = inputs
+            # Apply stochasticity to initial estimates
+            if vsa.mode == "HARDWARE":
+                # This is one way to randomize the initial estimates
+                init_estimates = vsa.ca90(init_estimates)
+            elif vsa.mode == "SOFTWARE":
+                # Replace this with true random vector
+                init_estimates = vsa.apply_noise(init_estimates, 0.5)
 
             # Run resonator network
-            result, convergence = resonator_network(inputs_, init_estimates, codebooks, orig_indices)
+            outcome, iter, converge = rn(inputs_, init_estimates)
 
             # Split batch results
-            for i in range(len(result)):
-                result_set[i].append(
-                    {
-                        'pos_x': result[i][0],
-                        'pos_y': result[i][1],
-                        'color': result[i][2],
-                        'digit': result[i][3]
-                    }
-                )
-                converg_set[i].append(convergence)
+            for i in range(len(outcome)):
+                unconverged[i] += 1 if converge == False else 0
+                iters[i].append(iter)
+                # Get the compositional vector and subtract it from the input
+                vector = vsa.get_vector(outcome[i])
+                sim_orig = vsa.dot_similarity(inputs_q[i], vector)
+                sim_remain = vsa.dot_similarity(inputs_[i], vector)
+                # Only explain away the vector if it's similar enough to the input
+                # Also only consider it as the final candidate if so
+                if sim_remain >= int(vsa.dim * SIM_EXPLAIN_THRESHOLD):
+                    outcomes[i].append(outcome[i])
+                    sim_to_orig[i].append(sim_orig)
+                    # sim_to_remain[i].append(sim_remain)
+                    inputs[i] = inputs[i] - vsa.expand(vector)
 
-                if VSA_MODE == "SOFTWARE":
-                    # Get the object vector and subtract it from the input
-                    # Key must be a list of tuple
-                    object = vsa.get_vector(result[i])
-                    inputs[i] = inputs[i] - object
-
-        return result_set, converg_set
+            # If energy left in the input is too low, likely no more vectors to be extracted and stop
+            # When inputs are batched, must wait until all inputs are exhausted
+            if (all(vsa.energy(inputs) <= int(vsa.dim * ENERGY_THRESHOLD))):
+                break
 
 
-    rn = Resonator(vsa, type=RESONATOR_TYPE, activation=ACTIVATION, iterations=NUM_ITERATIONS, device=device)
+        # Split batch results
+        for i in range(len(inputs)):
+            outcomes[i] = [outcomes[i][j] for j in range(len(outcomes[i])) if sim_to_orig[i][j] >= int(vsa.dim * SIM_DETECT_THRESHOLD)]
 
-    codebooks, orig_indices = rn.reorder_codebooks()
-    init_estimates = rn.get_init_estimates(codebooks, TEST_BATCH_SIZE)
-    if NORMALIZE:
-        init_estimates = vsa.normalize(init_estimates)
+        counts = [len(outcomes[i]) for i in range(len(outcomes))]
+
+        return outcomes, unconverged, iters, counts
+
+    rn = Resonator(vsa, mode=VSA_MODE, type=RESONATOR_TYPE, activation=ACTIVATION, act_val=ACT_VALUE, iterations=NUM_ITERATIONS, stoch=STOCHASTICITY, randomness=RANDOMNESS, early_converge=EARLY_CONVERGE, seed=SEED, device=device)
+
+    init_estimates = rn.get_init_estimates().unsqueeze(0).repeat(TEST_BATCH_SIZE,1,1)
 
     incorrect_count = [0] * MAX_NUM_OBJECTS
     unconverged = [[0,0] for _ in range(MAX_NUM_OBJECTS)]    # [correct, incorrect]
+    total_iters = [0] * MAX_NUM_OBJECTS
     n = 0
-
     # images in tensor([B, H, W, C])
     # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
     # targets in VSATensor([B, D])
@@ -192,15 +220,13 @@ def test_algo1(vsa, model, test_dl, device):
         images = images.to(device)
         images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
         infer_result = model(images_nchw)
-        if VSA_MODE == "SOFTWARE":
-            # round() will round numbers near 0 to 0, which is not ideal when there's one object, since the vector should be bipolar
-            # But 0 is legitimate when there are multiple objects.
-            infer_result = infer_result.round().type(torch.int8)
-        else:
-            infer_result = torch.sigmoid(infer_result).round().type(torch.int8)
+
+        # round() will round numbers near 0 to 0, which is not ideal when there's one object, since the vector should be bipolar
+        # But 0 is legitimate when there are multiple objects.
+        infer_result = infer_result.round().type(torch.int8)
 
         # Factorization
-        outcomes, convergence = factorization(vsa, rn, infer_result, init_estimates, codebooks, orig_indices)
+        outcomes, convergences, iters, counts = factorization(vsa, rn, infer_result, init_estimates)
 
         # Compare results
         # Batch: multiple samples
@@ -208,152 +234,179 @@ def test_algo1(vsa, model, test_dl, device):
             incorrect = False
             message = ""
             label = labels[i]
+            outcome = outcomes[i]
+            convergence = convergences[i]
+            count = counts[i]
+            iter = iters[i]
             sim_per_obj = []
+            result = []
+
+            # Convert to labels
+            for o in outcome:
+                result.append(
+                    {
+                        'pos_x': o[0],
+                        'pos_y': o[1],
+                        'color': o[2],
+                        'digit': o[3]
+                    }
+                )
+
+            total_iters[len(label)-1] += sum(iter)
+
+            if (count != len(label)):
+                incorrect = True
+                message += Fore.RED + "Incorrect number of vectors detected, got {}, expected {}".format(count, len(label)) + Fore.RESET + "\n"
+            else:
+                message += f"Correct number of vectors detected: {count} \n"
 
             # Sample: multiple objects
             for j in range(len(label)):
                 # Incorrect if one object is not detected 
                 # For n objects, only check the first n results
-                if (label[j] not in outcomes[i][0: len(label)]):
-                    message += Fore.RED + "Object {} is not detected.".format(label[j]) + Fore.RESET + "\n"
+                if (label[j] not in result):
                     incorrect = True
-                    unconverged[len(label)-1][1] += 1 if convergence[i][j] == NUM_ITERATIONS-1 else 0
+                    message += Fore.RED + "Object {} is not detected.".format(label[j]) + Fore.RESET + "\n"
                 else:
                     message += "Object {} is correctly detected.".format(label[j]) + "\n"
-                    unconverged[len(label)-1][0] += 1 if convergence[i][j] == NUM_ITERATIONS-1 else 0
 
                 # Collect per-object similarity
-                sim_per_obj.append(round(get_similarity(infer_result[i], vsa.lookup([label[j]]), NORMALIZE).item(), 3))
+                sim_per_obj.append(round(get_similarity(infer_result[i], vsa.lookup([label[j]]), True).item(), 3))
 
             if incorrect:
-                incorrect_count[len(label)-1] += 1 if incorrect else 0
+                unconverged[len(label)-1][1] += convergence
+                incorrect_count[len(label)-1] += 1
                 if (VERBOSE >= 1):
-                    print(Fore.BLUE + f"Test {n} Failed:      Convergence = {convergence[i]}" + Fore.RESET)
-                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], NORMALIZE).item()))
+                    print(Fore.BLUE + f"Test {n} Failed" + Fore.RESET)
+                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], False).item()))
                     print("Per-object similarity = {}".format(sim_per_obj))
+                    print(f"Unconverged: {convergence}")
+                    print(f"Iterations: {iter}")
                     print(message[:-1])
-                    print("Outcome = {}".format(outcomes[i][0: len(label)]))
+                    print("Result = {}".format(result))
             else:
+                unconverged[len(label)-1][0] += convergence
                 if (VERBOSE >= 2):
-                    print(Fore.BLUE + f"Test {n} Passed:      Convergence = {convergence[i]}" + Fore.RESET)
-                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], NORMALIZE).item()))
+                    print(Fore.BLUE + f"Test {n} Passed" + Fore.RESET)
+                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], False).item()))
                     print("Per-object similarity = {}".format(sim_per_obj))
+                    print(f"Unconverged: {convergence}")
+                    print(f"Iterations: {iter}")
                     print(message[:-1])
             n += 1
 
-    return incorrect_count, unconverged
+    return incorrect_count, unconverged, total_iters
 
-
+# TODO outdated
 def test_algo2(vsa, model, test_dl, device):
+    pass
+    # def factorization(vsa, resonator_network, inputs, init_estimates, codebooks, orig_indices = None):
+    #     result_set = [[] for _ in range(inputs.size(0))]
+    #     converg_set = [[] for _ in range(inputs.size(0))]
 
-    def factorization(vsa, resonator_network, inputs, init_estimates, codebooks, orig_indices = None):
-        result_set = [[] for _ in range(inputs.size(0))]
-        converg_set = [[] for _ in range(inputs.size(0))]
+    #     inputs = inputs.clone()
+    #     inputs = vsa.quantize(inputs)
 
-        inputs = inputs.clone()
-        if NORMALIZE:
-            inputs = vsa.normalize(inputs)
+    #     for k in range(MAX_NUM_OBJECTS):
+    #         # Manually unbind ID 
+    #         inputs_ = vsa.bind(inputs, vsa.id_codebook[k])
 
-        for k in range(MAX_NUM_OBJECTS):
-            # Manually unbind ID 
-            inputs_ = vsa.bind(inputs, vsa.id_codebook[k])
+    #         # Run resonator network
+    #         result, convergence = resonator_network(inputs_, init_estimates, codebooks, orig_indices)
 
-            # Run resonator network
-            result, convergence = resonator_network(inputs_, init_estimates, codebooks, orig_indices)
+    #         # Split batch results
+    #         for i in range(len(result)):
+    #             result_set[i].append(
+    #                 {
+    #                     'pos_x': result[i][0],
+    #                     'pos_y': result[i][1],
+    #                     'color': result[i][2],
+    #                     'digit': result[i][3]
+    #                 }
+    #             )
+    #             converg_set[i].append(convergence)
+    #     return result_set, converg_set
 
-            # Split batch results
-            for i in range(len(result)):
-                result_set[i].append(
-                    {
-                        'pos_x': result[i][0],
-                        'pos_y': result[i][1],
-                        'color': result[i][2],
-                        'digit': result[i][3]
-                    }
-                )
-                converg_set[i].append(convergence)
-        return result_set, converg_set
+    # rn = Resonator(vsa, type=RESONATOR_TYPE, activation=ACTIVATION, iterations=NUM_ITERATIONS, device=device)
 
-    rn = Resonator(vsa, type=RESONATOR_TYPE, activation=ACTIVATION, iterations=NUM_ITERATIONS, device=device)
+    # # Remove the ID codebook since it is manually unbound
+    # codebooks = vsa.codebooks[:-1]
 
-    # Remove the ID codebook since it is manually unbound
-    codebooks = vsa.codebooks[:-1]
+    # codebooks, orig_indices = rn.reorder_codebooks(codebooks)
+    # init_estimates = rn.get_init_estimates(codebooks, TEST_BATCH_SIZE)
+    # if QUANTIZE:
+    #     init_estimates = vsa.quantize(init_estimates)
 
-    codebooks, orig_indices = rn.reorder_codebooks(codebooks)
-    init_estimates = rn.get_init_estimates(codebooks, TEST_BATCH_SIZE)
-    if NORMALIZE:
-        init_estimates = vsa.normalize(init_estimates)
+    # incorrect_count = [0] * MAX_NUM_OBJECTS
+    # unconverged = [[0,0] for _ in range(MAX_NUM_OBJECTS)]    # [correct, incorrect]
+    # n = 0
 
-    incorrect_count = [0] * MAX_NUM_OBJECTS
-    unconverged = [[0,0] for _ in range(MAX_NUM_OBJECTS)]    # [correct, incorrect]
-    n = 0
+    # # images in tensor([B, H, W, C])
+    # # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
+    # # targets in VSATensor([B, D])
+    # for images, labels, targets in tqdm(test_dl, desc="Test", leave=True if VERBOSE >= 1 else False):
 
-    # images in tensor([B, H, W, C])
-    # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
-    # targets in VSATensor([B, D])
-    for images, labels, targets in tqdm(test_dl, desc="Test", leave=True if VERBOSE >= 1 else False):
+    #     # Inference
+    #     images = images.to(device)
+    #     images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
+    #     infer_result = model(images_nchw)
+    #     if VSA_MODE == "SOFTWARE":
+    #         infer_result = infer_result.round().type(torch.int8)
+    #     else:
+    #         infer_result = torch.sigmoid(infer_result).round().type(torch.int8)
 
-        # Inference
-        images = images.to(device)
-        images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
-        infer_result = model(images_nchw)
-        if VSA_MODE == "SOFTWARE":
-            infer_result = infer_result.round().type(torch.int8)
-        else:
-            infer_result = torch.sigmoid(infer_result).round().type(torch.int8)
+    #     # Factorization
+    #     outcomes, convergence = factorization(vsa, rn, infer_result, init_estimates, codebooks, orig_indices)
 
-        # Factorization
-        outcomes, convergence = factorization(vsa, rn, infer_result, init_estimates, codebooks, orig_indices)
+    #     # Compare results
+    #     # Batch: multiple samples
+    #     for i in range(len(labels)):
+    #         incorrect = False
+    #         message = ""
+    #         label = labels[i]
+    #         sim_per_obj = []
 
-        # Compare results
-        # Batch: multiple samples
-        for i in range(len(labels)):
-            incorrect = False
-            message = ""
-            label = labels[i]
-            sim_per_obj = []
+    #         # Must look up the entire label (instead of one object at a time) together to get the correct reordering done
+    #         gt_objs = vsa.lookup(label, bundled=False)
 
-            # Must look up the entire label (instead of one object at a time) together to get the correct reordering done
-            gt_objs = vsa.lookup(label, bundled=False)
-
-            # Sample: multiple objects
-            for j in range(len(label)):
-                # Incorrect if one object is not detected 
-                # For n objects, only check the first n results
-                if (label[j] not in outcomes[i][0: len(label)]):
-                    message += Fore.RED + "Object {} is not detected.".format(label[j]) + Fore.RESET + "\n"
-                    incorrect = True
-                    unconverged[len(label)-1][1] += 1 if convergence[i][j] == NUM_ITERATIONS-1 else 0
-                else:
-                    message += "Object {} is correctly detected.".format(label[j]) + "\n"
-                    unconverged[len(label)-1][0] += 1 if convergence[i][j] == NUM_ITERATIONS-1 else 0
+    #         # Sample: multiple objects
+    #         for j in range(len(label)):
+    #             # Incorrect if one object is not detected 
+    #             # For n objects, only check the first n results
+    #             if (label[j] not in outcomes[i][0: len(label)]):
+    #                 message += Fore.RED + "Object {} is not detected.".format(label[j]) + Fore.RESET + "\n"
+    #                 incorrect = True
+    #                 unconverged[len(label)-1][1] += 1 if convergence[i][j] == NUM_ITERATIONS-1 else 0
+    #             else:
+    #                 message += "Object {} is correctly detected.".format(label[j]) + "\n"
+    #                 unconverged[len(label)-1][0] += 1 if convergence[i][j] == NUM_ITERATIONS-1 else 0
                 
-                sim_per_obj.append(round(get_similarity(infer_result[i], gt_objs[j], NORMALIZE).item(), 3))
+    #             sim_per_obj.append(round(get_similarity(infer_result[i], gt_objs[j], NORMALIZE).item(), 3))
 
-            if incorrect:
-                incorrect_count[len(label)-1] += 1 if incorrect else 0
-                if (VERBOSE >= 1):
-                    print(Fore.BLUE + f"Test {n} Failed:      Convergence = {convergence[i]}" + Fore.RESET)
-                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], NORMALIZE).item()))
-                    print("Per-object similarity = {}".format(sim_per_obj))
-                    print(message[:-1])
-                    print("Outcome = {}".format(outcomes[i][0: len(label)]))
-            else:
-                if (VERBOSE >= 2):
-                    print(Fore.BLUE + f"Test {n} Passed:      Convergence = {convergence[i]}" + Fore.RESET)
-                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], NORMALIZE).item()))
-                    print("Per-object similarity = {}".format(sim_per_obj))
-                    print(message[:-1])
-            n += 1
+    #         if incorrect:
+    #             incorrect_count[len(label)-1] += 1 if incorrect else 0
+    #             if (VERBOSE >= 1):
+    #                 print(Fore.BLUE + f"Test {n} Failed:      Convergence = {convergence[i]}" + Fore.RESET)
+    #                 print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], NORMALIZE).item()))
+    #                 print("Per-object similarity = {}".format(sim_per_obj))
+    #                 print(message[:-1])
+    #                 print("Outcome = {}".format(outcomes[i][0: len(label)]))
+    #         else:
+    #             if (VERBOSE >= 2):
+    #                 print(Fore.BLUE + f"Test {n} Passed:      Convergence = {convergence[i]}" + Fore.RESET)
+    #                 print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], NORMALIZE).item()))
+    #                 print("Per-object similarity = {}".format(sim_per_obj))
+    #                 print(message[:-1])
+    #         n += 1
 
-    return incorrect_count, unconverged
+    # return incorrect_count, unconverged
         
 
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Workload Config: algorithm = {ALGO}, vsa mode = {VSA_MODE}, dim = {DIM}, num pos x = {NUM_POS_X}, num pos y = {NUM_POS_Y}, num color = {NUM_COLOR}, num digits = 10, max num objects = {MAX_NUM_OBJECTS}")
 
-    vsa = get_vsa()
+    vsa = get_vsa(device)
     model = MultiConceptNonDecomposed(dim=DIM, device=device)
 
     if RUN_MODE == "TRAIN":
@@ -381,17 +434,22 @@ if __name__ == "__main__":
 
         model.eval()
 
-        print(f"Resonator setup: type = {RESONATOR_TYPE}, normalize = {NORMALIZE}, activation = {ACTIVATION}, iterations = {NUM_ITERATIONS}")
+        print(Fore.CYAN + f"""
+Resonator setup:  max_trials = {MAX_TRIALS}, energy_thresh = {ENERGY_THRESHOLD}, similarity_explain_thresh = {SIM_EXPLAIN_THRESHOLD}, \
+similarity_detect_thresh = {SIM_DETECT_THRESHOLD}, expanded_hd_bits = {EHD_BITS}, int_reg_bits = {SIM_BITS}, 
+resonator = {RESONATOR_TYPE}, iterations = {NUM_ITERATIONS}, stochasticity = {STOCHASTICITY}, randomness = {RANDOMNESS}, \
+activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY_CONVERGE}
+""" + Fore.RESET)
 
         test_dl = get_test_data(vsa)
  
         if ALGO == "algo1":
-            incorrect_count, unconverged = test_algo1(vsa, model, test_dl, device)
+            incorrect_count, unconverged, total_iters = test_algo1(vsa, model, test_dl, device)
         elif ALGO == "algo2":
-            incorrect_count, unconverged = test_algo2(vsa, model, test_dl, device)
+            incorrect_count, unconverged, total_iters = test_algo2(vsa, model, test_dl, device)
 
         for i in range(MAX_NUM_OBJECTS):
-            print(f"{i+1} objects: Accuracy = {NUM_TEST_SAMPLES//MAX_NUM_OBJECTS - incorrect_count[i]}/{NUM_TEST_SAMPLES//MAX_NUM_OBJECTS}     Unconverged = {unconverged[i]}/{NUM_TEST_SAMPLES//MAX_NUM_OBJECTS * (i+1)}")
+            print(f"{i+1} objects: Accuracy = {NUM_TEST_SAMPLES//MAX_NUM_OBJECTS - incorrect_count[i]}/{NUM_TEST_SAMPLES//MAX_NUM_OBJECTS}   Unconverged = {unconverged[i]}    Average iterations: {total_iters[i] / (NUM_TEST_SAMPLES//MAX_NUM_OBJECTS)}")
 
     # Data Gen mode      
     else:
