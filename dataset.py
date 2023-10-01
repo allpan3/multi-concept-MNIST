@@ -42,21 +42,12 @@ class MultiConceptMNIST(VisionDataset):
         super().__init__(root, transform=transform, target_transform=target_transform)
 
         if (train):
-            self.num_samples = [0] * max_num_objects
-            if max_num_objects == 1:
-                self.num_samples[0] = num_samples
-            elif max_num_objects == 2:
-                self.num_samples[0] = int(num_samples * 0.3)
-                self.num_samples[1] = int(num_samples * 0.7)
-            elif max_num_objects == 3:
-                self.num_samples[0] = int(num_samples * 0.15)
-                self.num_samples[1] = int(num_samples * 0.35)
-                self.num_samples[2] = int(num_samples * 0.5)
-            else:
-                raise NotImplementedError
+            # Allocate more samples for larger object counts for training
+            total = sum([x+1 for x in range(max_num_objects)])
+            self.num_samples = [round((x+1)/total * num_samples) for x in range(max_num_objects)]
         else:
+            # Even sample numbers for testing
             self.num_samples = [num_samples // max_num_objects] * max_num_objects
-
 
         assert(vsa.num_pos_x == num_pos_x)
         assert(vsa.num_pos_y == num_pos_y)
@@ -68,7 +59,6 @@ class MultiConceptMNIST(VisionDataset):
         assert(max_num_objects <= num_pos_x * num_pos_y)
         self.max_num_objects = max_num_objects
         
-
         self.data = []
         self.labels = []
         self.targets = []
