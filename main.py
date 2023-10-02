@@ -95,13 +95,13 @@ def train(dataloader, model, loss_fn, optimizer, num_epoch, cur_time, device = "
 
     return round(loss.item(), 4)
 
-def get_similarity(v1, v2, quantize):
+def get_similarity(v1, v2, quantized):
     """
     Return the hamming similarity.
-    Always compare the similarity between quantized vectors. If inputs are not quantized, supply quantize=True
+    Always compare the similarity between quantized vectors. If inputs are not quantized, quantize them first.
     Hamming similarity is linear and should reflect the noise level
     """
-    if quantize:
+    if not quantized:
         if VSA_MODE == "SOFTWARE":
             # Compare the quantized vectors
             positive = torch.tensor(1, device=v1.device)
@@ -263,14 +263,14 @@ def test_algo1(vsa, model, test_dl, device):
                     message += "Object {} is correctly detected.".format(label[j]) + "\n"
 
                 # Collect per-object similarity
-                sim_per_obj.append(round(get_similarity(infer_result[i], vsa.lookup([label[j]]), True).item(), 3))
+                sim_per_obj.append(round(get_similarity(infer_result[i], vsa.lookup([label[j]]), False).item(), 3))
 
             if incorrect:
                 unconverged[len(label)-1][1] += convergence
                 incorrect_count[len(label)-1] += 1
                 if (VERBOSE >= 1):
                     print(Fore.BLUE + f"Test {n} Failed" + Fore.RESET)
-                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], True).item()))
+                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], False).item()))
                     print("Per-object similarity = {}".format(sim_per_obj))
                     print(f"Unconverged: {convergence}")
                     print(f"Iterations: {iter}")
@@ -280,7 +280,7 @@ def test_algo1(vsa, model, test_dl, device):
                 unconverged[len(label)-1][0] += convergence
                 if (VERBOSE >= 2):
                     print(Fore.BLUE + f"Test {n} Passed" + Fore.RESET)
-                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], True).item()))
+                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], False).item()))
                     print("Per-object similarity = {}".format(sim_per_obj))
                     print(f"Unconverged: {convergence}")
                     print(f"Iterations: {iter}")
