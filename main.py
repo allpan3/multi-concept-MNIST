@@ -17,9 +17,9 @@ from pytz import timezone
 ###########
 # Configs #
 ###########
-VERBOSE = 1
-SEED = None
-RUN_MODE = "TRAIN" # "TRAIN", "TEST", "DATAGEN"
+VERBOSE = 2
+SEED = 0
+RUN_MODE = "TEST" # "TRAIN", "TEST", "DATAGEN"
 ALGO = "algo1" # "algo1", "algo2"
 VSA_MODE = "HARDWARE" # "SOFTWARE", "HARDWARE"
 DIM = 1024
@@ -31,15 +31,15 @@ NUM_COLOR = 7
 EHD_BITS = 8
 SIM_BITS = 13
 # Train
-TRAIN_EPOCH = 20
-TRAIN_BATCH_SIZE = 128
-NUM_TRAIN_SAMPLES = 100000
+TRAIN_EPOCH = 15
+TRAIN_BATCH_SIZE = 256
+NUM_TRAIN_SAMPLES = 300000
 # Test
 TEST_BATCH_SIZE = 1
-NUM_TEST_SAMPLES = 300
+NUM_TEST_SAMPLES = 3
 # Resonator
 RESONATOR_TYPE = "SEQUENTIAL" # "SEQUENTIAL", "CONCURRENT"
-MAX_TRIALS = 20
+MAX_TRIALS = MAX_NUM_OBJECTS * 2
 NUM_ITERATIONS = 2000
 ACTIVATION = 'THRESH_AND_SCALE'      # 'IDENTITY', 'THRESHOLD', 'SCALEDOWN', "THRESH_AND_SCALE"
 ACT_VALUE = 32
@@ -95,34 +95,26 @@ def train(dataloader, model, loss_fn, optimizer, num_epoch, cur_time, device = "
 
     return round(loss.item(), 4)
 
-def get_similarity(v1, v2, quantized):
+def get_similarity(v1, v2, quantize):
     """
-    Return the hamming similarity for quantized vectors, and cosine similarity for unquantized vectors
+    Return the hamming similarity.
+    Always compare the similarity between quantized vectors. If inputs are not quantized, supply quantize=True
     Hamming similarity is linear and should reflect the noise level
-    Cosine similarity is non-linear and may not reflect the noise level
     """
-    if quantized:
+    if quantize:
         if VSA_MODE == "SOFTWARE":
             # Compare the quantized vectors
             positive = torch.tensor(1, device=v1.device)
             negative = torch.tensor(-1, device=v1.device)
-            v1_ = torch.where(v1 >= 0, positive, negative)
-            v2_ = torch.where(v2 >= 0, positive, negative)
-            return torch.sum(torch.where(v1_ == v2_, 1, 0), dim=-1) / DIM
+            v1 = torch.where(v1 >= 0, positive, negative)
+            v2 = torch.where(v2 >= 0, positive, negative)
         else:
             positive = torch.tensor(1, device=v1.device)
             negative = torch.tensor(0, device=v1.device)
-            v1_ = torch.where(v1 >= 0, positive, negative)
-            v2_ = torch.where(v2 >= 0, positive, negative)
-            return torch.sum(torch.where(v1 == v2, 1, 0), dim=-1) / DIM
-    else:
-            v1_dot = torch.sum(v1 * v1, dim=-1)
-            v1_mag = torch.sqrt(v1_dot)
-            v2_dot = torch.sum(v2 * v2, dim=-1)
-            v2_mag = torch.sqrt(v2_dot)
-            magnitude = v1_mag * v2_mag
-            magnitude = torch.clamp(magnitude, min=1e-08)
-            return torch.matmul(v1.type(torch.float32), v2.type(torch.float32)) / magnitude
+            v1 = torch.where(v1 >= 0, positive, negative)
+            v2 = torch.where(v2 >= 0, positive, negative)
+
+    return torch.sum(torch.where(v1 == v2, 1, 0), dim=-1) / DIM
             
 def get_vsa(device):
     if ALGO == "algo1":
@@ -278,7 +270,7 @@ def test_algo1(vsa, model, test_dl, device):
                 incorrect_count[len(label)-1] += 1
                 if (VERBOSE >= 1):
                     print(Fore.BLUE + f"Test {n} Failed" + Fore.RESET)
-                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], False).item()))
+                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], True).item()))
                     print("Per-object similarity = {}".format(sim_per_obj))
                     print(f"Unconverged: {convergence}")
                     print(f"Iterations: {iter}")
@@ -288,7 +280,7 @@ def test_algo1(vsa, model, test_dl, device):
                 unconverged[len(label)-1][0] += convergence
                 if (VERBOSE >= 2):
                     print(Fore.BLUE + f"Test {n} Passed" + Fore.RESET)
-                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], False).item()))
+                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], True).item()))
                     print("Per-object similarity = {}".format(sim_per_obj))
                     print(f"Unconverged: {convergence}")
                     print(f"Iterations: {iter}")
@@ -410,8 +402,8 @@ if __name__ == "__main__":
     model = MultiConceptNonDecomposed(dim=DIM, device=device)
 
     if RUN_MODE == "TRAIN":
-        print(f"Training on {device}: samples = {NUM_TRAIN_SAMPLES}, epochs = {TRAIN_EPOCH}, batch size = 128")
-        loss_fn = torch.nn.MSELoss() if VSA_MODE == "SOFTWARE" else torch.nn.BCEWithLogitsLoss()
+        print(f"Training on {device}: samples = {NUM_TRAIN_SAMPLES}, epochs = {TRAIN_EPOCH}, batch size = {TRAIN_BATCH_SIZE}")
+        loss_fn = torch.nn.MSELoss() if ALGO == "algo1" else torch.nn.BCEWithLogitsLoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
         cur_time_pst = datetime.now().astimezone(timezone('US/Pacific')).strftime("%m-%d-%H-%M")
         train_dl = get_train_data(vsa)
