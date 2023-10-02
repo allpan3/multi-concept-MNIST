@@ -17,7 +17,7 @@ from pytz import timezone
 ###########
 # Configs #
 ###########
-VERBOSE = 2
+VERBOSE = 1
 SEED = 0
 RUN_MODE = "TEST" # "TRAIN", "TEST", "DATAGEN"
 ALGO = "algo1" # "algo1", "algo2"
@@ -36,7 +36,7 @@ TRAIN_BATCH_SIZE = 256
 NUM_TRAIN_SAMPLES = 300000
 # Test
 TEST_BATCH_SIZE = 1
-NUM_TEST_SAMPLES = 3
+NUM_TEST_SAMPLES = 300
 # Resonator
 RESONATOR_TYPE = "SEQUENTIAL" # "SEQUENTIAL", "CONCURRENT"
 MAX_TRIALS = MAX_NUM_OBJECTS * 2
@@ -45,9 +45,10 @@ ACTIVATION = 'THRESH_AND_SCALE'      # 'IDENTITY', 'THRESHOLD', 'SCALEDOWN', "TH
 ACT_VALUE = 32
 STOCHASTICITY = "SIMILARITY"  # apply stochasticity: "NONE", "SIMILARITY", "VECTOR"
 RANDOMNESS = 0.03
-SIM_EXPLAIN_THRESHOLD = 0.15
-SIM_DETECT_THRESHOLD = 0.08
-ENERGY_THRESHOLD = 0.22
+# Similarity thresholds are affected by the maximum number of vectors superposed. These values need to be lowered when more vectors are superposed
+SIM_EXPLAIN_THRESHOLD = 0.22
+SIM_DETECT_THRESHOLD = 0.12
+ENERGY_THRESHOLD = 0.25
 EARLY_CONVERGE = 0.6
 
 # In hardware mode, the activation value needs to be a power of two
@@ -148,6 +149,7 @@ def test_algo1(vsa, model, test_dl, device):
         iters = [[] for _ in range(inputs.size(0))]
         sim_to_remain = [[] for _ in range(inputs.size(0))]
         sim_to_orig = [[] for _ in range(inputs.size(0))]
+        debug_message = ""
 
         inputs = inputs.clone()
         inputs_q = vsa.quantize(inputs)
@@ -183,6 +185,8 @@ def test_algo1(vsa, model, test_dl, device):
                     # sim_to_remain[i].append(sim_remain)
                     inputs[i] = inputs[i] - vsa.expand(vector)
 
+                debug_message += f"DEBUG: outcome = {outcome[i]}, sim_orig = {round(sim_orig.item()/DIM, 3)}, sim_remain = {round(sim_remain.item()/DIM, 3)}, energy_left = {round(vsa.energy(inputs[i]).item()/DIM,3)}, {converge}\n"
+
             # If energy left in the input is too low, likely no more vectors to be extracted and stop
             # When inputs are batched, must wait until all inputs are exhausted
             if (all(vsa.energy(inputs) <= int(vsa.dim * ENERGY_THRESHOLD))):
@@ -191,11 +195,12 @@ def test_algo1(vsa, model, test_dl, device):
 
         # Split batch results
         for i in range(len(inputs)):
+            debug_message += f"DEBUG: pre-filtered: {outcomes[i]}\n"
             outcomes[i] = [outcomes[i][j] for j in range(len(outcomes[i])) if sim_to_orig[i][j] >= int(vsa.dim * SIM_DETECT_THRESHOLD)]
 
         counts = [len(outcomes[i]) for i in range(len(outcomes))]
 
-        return outcomes, unconverged, iters, counts
+        return outcomes, unconverged, iters, counts, debug_message
 
     rn = Resonator(vsa, mode=VSA_MODE, type=RESONATOR_TYPE, activation=ACTIVATION, act_val=ACT_VALUE, iterations=NUM_ITERATIONS, stoch=STOCHASTICITY, randomness=RANDOMNESS, early_converge=EARLY_CONVERGE, seed=SEED, device=device)
 
@@ -218,7 +223,7 @@ def test_algo1(vsa, model, test_dl, device):
         infer_result = infer_result.round().type(torch.int8)
 
         # Factorization
-        outcomes, convergences, iters, counts = factorization(vsa, rn, infer_result, init_estimates)
+        outcomes, convergences, iters, counts, debug_message = factorization(vsa, rn, infer_result, init_estimates)
 
         # Compare results
         # Batch: multiple samples
@@ -276,6 +281,7 @@ def test_algo1(vsa, model, test_dl, device):
                     print(f"Iterations: {iter}")
                     print(message[:-1])
                     print("Result = {}".format(result))
+                    print(debug_message)
             else:
                 unconverged[len(label)-1][0] += convergence
                 if (VERBOSE >= 2):
@@ -285,6 +291,7 @@ def test_algo1(vsa, model, test_dl, device):
                     print(f"Unconverged: {convergence}")
                     print(f"Iterations: {iter}")
                     print(message[:-1])
+                    print(debug_message)
             n += 1
 
     return incorrect_count, unconverged, total_iters
