@@ -19,7 +19,7 @@ from pytz import timezone
 ###########
 VERBOSE = 1
 SEED = 0
-RUN_MODE = "TEST" # "TRAIN", "TEST", "DATAGEN"
+RUN_MODE = "TRAIN" # "TRAIN", "TEST", "DATAGEN"
 ALGO = "algo1" # "algo1", "algo2"
 VSA_MODE = "HARDWARE" # "SOFTWARE", "HARDWARE"
 DIM = 1024
@@ -31,7 +31,7 @@ NUM_COLOR = 7
 EHD_BITS = 8
 SIM_BITS = 13
 # Train
-TRAIN_EPOCH = 15
+TRAIN_EPOCH = 5
 TRAIN_BATCH_SIZE = 256
 NUM_TRAIN_SAMPLES = 300000
 # Test
@@ -47,7 +47,7 @@ STOCHASTICITY = "SIMILARITY"  # apply stochasticity: "NONE", "SIMILARITY", "VECT
 RANDOMNESS = 0.03
 # Similarity thresholds are affected by the maximum number of vectors superposed. These values need to be lowered when more vectors are superposed
 SIM_EXPLAIN_THRESHOLD = 0.22
-SIM_DETECT_THRESHOLD = 0.12
+SIM_DETECT_THRESHOLD = 0.15
 ENERGY_THRESHOLD = 0.25
 EARLY_CONVERGE = 0.6
 
@@ -158,13 +158,13 @@ def test_algo1(vsa, model, test_dl, device):
         for k in range(MAX_TRIALS):
             inputs_ = vsa.quantize(inputs)
 
-            # Apply stochasticity to initial estimates
-            if vsa.mode == "HARDWARE":
-                # This is one way to randomize the initial estimates
-                init_estimates = vsa.ca90(init_estimates)
-            elif vsa.mode == "SOFTWARE":
-                # Replace this with true random vector
-                init_estimates = vsa.apply_noise(init_estimates, 0.5)
+            # # Apply stochasticity to initial estimates
+            # if vsa.mode == "HARDWARE":
+            #     # This is one way to randomize the initial estimates
+            #     init_estimates = vsa.ca90(init_estimates)
+            # elif vsa.mode == "SOFTWARE":
+            #     # Replace this with true random vector
+            #     init_estimates = vsa.apply_noise(init_estimates, 0.5)
 
             # Run resonator network
             outcome, iter, converge = rn(inputs_, init_estimates)
@@ -177,6 +177,7 @@ def test_algo1(vsa, model, test_dl, device):
                 vector = vsa.get_vector(outcome[i])
                 sim_orig = vsa.dot_similarity(inputs_q[i], vector)
                 sim_remain = vsa.dot_similarity(inputs_[i], vector)
+                explained = "NOT EXPLAINED"
                 # Only explain away the vector if it's similar enough to the input
                 # Also only consider it as the final candidate if so
                 if sim_remain >= int(vsa.dim * SIM_EXPLAIN_THRESHOLD):
@@ -184,8 +185,9 @@ def test_algo1(vsa, model, test_dl, device):
                     sim_to_orig[i].append(sim_orig)
                     # sim_to_remain[i].append(sim_remain)
                     inputs[i] = inputs[i] - vsa.expand(vector)
+                    explained = "EXPLAINED"
 
-                debug_message += f"DEBUG: outcome = {outcome[i]}, sim_orig = {round(sim_orig.item()/DIM, 3)}, sim_remain = {round(sim_remain.item()/DIM, 3)}, energy_left = {round(vsa.energy(inputs[i]).item()/DIM,3)}, {converge}\n"
+                debug_message += f"DEBUG: outcome = {outcome[i]}, sim_orig = {round(sim_orig.item()/DIM, 3)}, sim_remain = {round(sim_remain.item()/DIM, 3)}, energy_left = {round(vsa.energy(inputs[i]).item()/DIM,3)}, {converge}, {explained}\n"
 
             # If energy left in the input is too low, likely no more vectors to be extracted and stop
             # When inputs are batched, must wait until all inputs are exhausted
@@ -411,6 +413,12 @@ if __name__ == "__main__":
     if RUN_MODE == "TRAIN":
         print(f"Training on {device}: samples = {NUM_TRAIN_SAMPLES}, epochs = {TRAIN_EPOCH}, batch size = {TRAIN_BATCH_SIZE}")
         loss_fn = torch.nn.MSELoss() if ALGO == "algo1" else torch.nn.BCEWithLogitsLoss()
+
+        if sys.argv[-1].endswith(".pt") and os.path.exists(sys.argv[-1]):
+            checkpoint = torch.load(sys.argv[-1])
+            model.load_state_dict(checkpoint)
+            print(f"On top of checkpoint {sys.argv[-1]}")
+
         optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
         cur_time_pst = datetime.now().astimezone(timezone('US/Pacific')).strftime("%m-%d-%H-%M")
         train_dl = get_train_data(vsa)
