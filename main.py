@@ -22,7 +22,7 @@ SEED = 0
 ALGO = "algo1" # "algo1", "algo2"
 VSA_MODE = "HARDWARE" # "SOFTWARE", "HARDWARE"
 DIM = 1024
-MAX_NUM_OBJECTS = 6
+MAX_NUM_OBJECTS = 3
 SINGLE_COUNT = False # True, False
 NUM_POS_X = 3
 NUM_POS_Y = 3
@@ -31,12 +31,12 @@ NUM_COLOR = 7
 EHD_BITS = 9
 SIM_BITS = 13
 # Train
-TRAIN_EPOCH = 30
-TRAIN_BATCH_SIZE = 256
+TRAIN_EPOCH = 50
+TRAIN_BATCH_SIZE = 64
 NUM_TRAIN_SAMPLES = 300000
 # Test
 TEST_BATCH_SIZE = 1
-NUM_TEST_SAMPLES = 600
+NUM_TEST_SAMPLES = 3000
 # Resonator
 RESONATOR_TYPE = "SEQUENTIAL" # "SEQUENTIAL", "CONCURRENT"
 MAX_TRIALS = MAX_NUM_OBJECTS + 5
@@ -212,11 +212,14 @@ def test_algo1(vsa, model, test_dl, device):
                 break
 
 
-        # Split batch results
+        # Filter output based on similarity threshold
         for i in range(len(inputs)):
             debug_message += f"DEBUG: pre-filtered: {outcomes[i]}\n"
             outcomes[i] = [outcomes[i][j] for j in range(len(outcomes[i])) if sim_to_orig[i][j] >= int(vsa.dim * SIM_DETECT_THRESHOLD)]
-
+            # Since we know there'll be no overlapped objects in this workload, we can filter out duplicates
+            # Duplicates can appear if one of the objects is more similar to the input than the other (due to biased noise of NN)
+            outcomes[i] = list(set(outcomes[i]))
+        
         counts = [len(outcomes[i]) for i in range(len(outcomes))]
 
         return outcomes, unconverged, iters, counts, debug_message
@@ -237,6 +240,7 @@ def test_algo1(vsa, model, test_dl, device):
         images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
         infer_result = model(images_nchw)
 
+        # print(infer_result.tolist())
         # round() will round numbers near 0 to 0, which is not ideal when there's one object, since the vector should be bipolar
         # But 0 is legitimate when there are multiple objects.
         infer_result = infer_result.round().type(torch.int8)
@@ -434,7 +438,6 @@ if __name__ == "__main__":
 
     if action == "train":
         print(f"Training on {device}: samples = {NUM_TRAIN_SAMPLES}, epochs = {TRAIN_EPOCH}, batch size = {TRAIN_BATCH_SIZE}")
-        loss_fn = torch.nn.MSELoss() if ALGO == "algo1" else torch.nn.BCEWithLogitsLoss()
 
         if sys.argv[-1].endswith(".pt"):
             if os.path.exists(sys.argv[-1]):
@@ -445,6 +448,7 @@ if __name__ == "__main__":
                 print("Invalid model checkpoint path.")
                 exit(1)
 
+        loss_fn = torch.nn.MSELoss() if ALGO == "algo1" else torch.nn.BCEWithLogitsLoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
         cur_time_pst = datetime.now().astimezone(timezone('US/Pacific')).strftime("%m-%d-%H-%M")
         train_dl = get_train_data(vsa)

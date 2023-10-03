@@ -6,3 +6,6 @@ clean-samples:
 
 clean-codebooks: clean-samples
 	rm -rf tests/*/*/codebooks.pt
+
+clean-all: clean-samples clean-codebooks
+	find tests -type d -empty -delete
