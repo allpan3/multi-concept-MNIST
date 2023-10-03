@@ -17,40 +17,40 @@ from pytz import timezone
 ###########
 # Configs #
 ###########
-VERBOSE = 2
+VERBOSE = 1
 SEED = 0
-RUN_MODE = "TEST" # "TRAIN", "TEST", "DATAGEN"
 ALGO = "algo1" # "algo1", "algo2"
 VSA_MODE = "HARDWARE" # "SOFTWARE", "HARDWARE"
 DIM = 1024
-MAX_NUM_OBJECTS = 4
-SINGLE_COUNT = True
+MAX_NUM_OBJECTS = 6
+SINGLE_COUNT = False # True, False
 NUM_POS_X = 3
 NUM_POS_Y = 3
 NUM_COLOR = 7
 # Hardware config
-EHD_BITS = 8
+EHD_BITS = 9
 SIM_BITS = 13
 # Train
-TRAIN_EPOCH = 10
-TRAIN_BATCH_SIZE = 128
+TRAIN_EPOCH = 30
+TRAIN_BATCH_SIZE = 256
 NUM_TRAIN_SAMPLES = 300000
 # Test
 TEST_BATCH_SIZE = 1
-NUM_TEST_SAMPLES = 100
+NUM_TEST_SAMPLES = 600
 # Resonator
 RESONATOR_TYPE = "SEQUENTIAL" # "SEQUENTIAL", "CONCURRENT"
-MAX_TRIALS = MAX_NUM_OBJECTS * 2
+MAX_TRIALS = MAX_NUM_OBJECTS + 5
 NUM_ITERATIONS = 200
 ACTIVATION = 'THRESH_AND_SCALE'      # 'IDENTITY', 'THRESHOLD', 'SCALEDOWN', "THRESH_AND_SCALE"
-ACT_VALUE = 32
+ACT_VALUE = 16
 STOCHASTICITY = "SIMILARITY"  # apply stochasticity: "NONE", "SIMILARITY", "VECTOR"
-RANDOMNESS = 0.03
+RANDOMNESS = 0.04
 # Similarity thresholds are affected by the maximum number of vectors superposed. These values need to be lowered when more vectors are superposed
-SIM_EXPLAIN_THRESHOLD = 0.22
+SIM_EXPLAIN_THRESHOLD = 0.25
 SIM_DETECT_THRESHOLD = 0.15
 ENERGY_THRESHOLD = 0.25
 EARLY_CONVERGE = 0.6
+EARLY_TERM_THRESHOLD = 0.15
 
 # In hardware mode, the activation value needs to be a power of two
 if VSA_MODE == "HARDWARE" and (ACTIVATION == "SCALEDOWN" or ACTIVATION == "THRESH_AND_SCALE"):
@@ -83,7 +83,7 @@ def train(dataloader, model, loss_fn, optimizer, num_epoch, cur_time, device = "
     # targets in VSATensor([B, D])
     for epoch in range(num_epoch):
         if epoch != 0 and epoch % 5 == 0:
-            model_weight_loc = os.path.join(test_dir, f"model_weights_{MAX_NUM_OBJECTS}objs{'_single_count' if SINGLE_COUNT else ''}_{TRAIN_BATCH_SIZE}batch_{epoch}epoch_{NUM_TRAIN_SAMPLES}samples_{round(loss,4)}loss_{cur_time}.pt")
+            model_weight_loc = os.path.join(test_dir, f"model_weights_{MAX_NUM_OBJECTS}objs{'_single_count' if SINGLE_COUNT else ''}_{TRAIN_BATCH_SIZE}batch_{epoch}epoch_{NUM_TRAIN_SAMPLES}samples_{round(loss.item(),4)}loss_{cur_time}.pt")
             torch.save(model.state_dict(), model_weight_loc)
             print(f"Model checkpoint saved to {model_weight_loc}")
 
@@ -111,15 +111,11 @@ def get_similarity(v1, v2, quantized):
     if not quantized:
         if VSA_MODE == "SOFTWARE":
             # Compare the quantized vectors
-            positive = torch.tensor(1, device=v1.device)
-            negative = torch.tensor(-1, device=v1.device)
-            v1 = torch.where(v1 >= 0, positive, negative)
-            v2 = torch.where(v2 >= 0, positive, negative)
+            v1 = torch.where(v1 >= 0, 1, -1).to(v1.device)
+            v2 = torch.where(v2 >= 0, 1, -1).to(v1.device)
         else:
-            positive = torch.tensor(1, device=v1.device)
-            negative = torch.tensor(0, device=v1.device)
-            v1 = torch.where(v1 >= 0, positive, negative)
-            v2 = torch.where(v2 >= 0, positive, negative)
+            v1 = torch.where(v1 >= 0, 1, 0).to(v1.device)
+            v2 = torch.where(v2 >= 0, 1, 0).to(v1.device)
 
     return torch.sum(torch.where(v1 == v2, 1, 0), dim=-1) / DIM
             
@@ -148,13 +144,17 @@ def test_algo1(vsa, model, test_dl, device):
     NN needs to be trained with unquantized vectors
     """
 
+    assert TEST_BATCH_SIZE == 1, "Batch size != 1 is not yet supported"
+
     def factorization(vsa, rn, inputs, init_estimates):
 
         outcomes = [[] for _ in range(inputs.size(0))]  # num of batches
         unconverged = [0] * inputs.size(0)
         iters = [[] for _ in range(inputs.size(0))]
         sim_to_remain = [[] for _ in range(inputs.size(0))]
+        sim_to_remain_all = [[] for _ in range(inputs.size(0))]
         sim_to_orig = [[] for _ in range(inputs.size(0))]
+        sim_to_orig_all = [[] for _ in range(inputs.size(0))]
         debug_message = ""
 
         inputs = inputs.clone()
@@ -184,6 +184,8 @@ def test_algo1(vsa, model, test_dl, device):
                 sim_orig = vsa.dot_similarity(inputs_q[i], vector)
                 sim_remain = vsa.dot_similarity(inputs_[i], vector)
                 explained = "NOT EXPLAINED"
+                sim_to_orig_all[i].append(sim_orig)
+                sim_to_remain_all[i].append(sim_remain)
                 # Only explain away the vector if it's similar enough to the input
                 # Also only consider it as the final candidate if so
                 if sim_remain >= int(vsa.dim * SIM_EXPLAIN_THRESHOLD):
@@ -194,6 +196,15 @@ def test_algo1(vsa, model, test_dl, device):
                     explained = "EXPLAINED"
 
                 debug_message += f"DEBUG: outcome = {outcome[i]}, sim_orig = {round(sim_orig.item()/DIM, 3)}, sim_remain = {round(sim_remain.item()/DIM, 3)}, energy_left = {round(vsa.energy(inputs[i]).item()/DIM,3)}, {converge}, {explained}\n"
+
+            # If the final t trial all generate low similarity, likely no more vectors to be extracted and stop
+            t = 3
+            if (k >= t-1):
+                try:
+                    if (all(torch.stack(sim_to_orig_all[0][-t:]) < int(vsa.dim * EARLY_TERM_THRESHOLD))):
+                        break
+                except:
+                    pass
 
             # If energy left in the input is too low, likely no more vectors to be extracted and stop
             # When inputs are batched, must wait until all inputs are exhausted
@@ -410,20 +421,29 @@ def test_algo2(vsa, model, test_dl, device):
         
 
 if __name__ == "__main__":
+
+    action = sys.argv[1] # train, test, datagen
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    # if action == "test":
+        # device = "cpu"
     print(f"Workload Config: algorithm = {ALGO}, vsa mode = {VSA_MODE}, dim = {DIM}, num pos x = {NUM_POS_X}, num pos y = {NUM_POS_Y}, num color = {NUM_COLOR}, num digits = 10, max num objects = {MAX_NUM_OBJECTS}")
 
     vsa = get_vsa(device)
     model = MultiConceptNonDecomposed(dim=DIM, device=device)
 
-    if RUN_MODE == "TRAIN":
+    if action == "train":
         print(f"Training on {device}: samples = {NUM_TRAIN_SAMPLES}, epochs = {TRAIN_EPOCH}, batch size = {TRAIN_BATCH_SIZE}")
         loss_fn = torch.nn.MSELoss() if ALGO == "algo1" else torch.nn.BCEWithLogitsLoss()
 
-        if sys.argv[-1].endswith(".pt") and os.path.exists(sys.argv[-1]):
-            checkpoint = torch.load(sys.argv[-1])
-            model.load_state_dict(checkpoint)
-            print(f"On top of checkpoint {sys.argv[-1]}")
+        if sys.argv[-1].endswith(".pt"):
+            if os.path.exists(sys.argv[-1]):
+                checkpoint = torch.load(sys.argv[-1])
+                model.load_state_dict(checkpoint)
+                print(f"On top of checkpoint {sys.argv[-1]}")
+            else:
+                print("Invalid model checkpoint path.")
+                exit(1)
 
         optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
         cur_time_pst = datetime.now().astimezone(timezone('US/Pacific')).strftime("%m-%d-%H-%M")
@@ -434,7 +454,7 @@ if __name__ == "__main__":
         print(f"Model weights saved to {model_weight_loc}")
 
     # Test mode
-    elif RUN_MODE == "TEST":
+    elif action == "test":
         print(f"Running test on {device}, batch size = {TEST_BATCH_SIZE}")
 
         # assume we provided checkpoint path at the end of the command line
@@ -461,11 +481,14 @@ activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY
         elif ALGO == "algo2":
             incorrect_count, unconverged, total_iters = test_algo2(vsa, model, test_dl, device)
 
-        for i in range(MAX_NUM_OBJECTS):
-            print(f"{i+1} objects: Accuracy = {NUM_TEST_SAMPLES//MAX_NUM_OBJECTS - incorrect_count[i]}/{NUM_TEST_SAMPLES//MAX_NUM_OBJECTS}   Unconverged = {unconverged[i]}    Average iterations: {total_iters[i] / (NUM_TEST_SAMPLES//MAX_NUM_OBJECTS)}")
+        if SINGLE_COUNT:
+            print(f"{MAX_NUM_OBJECTS} objects: Accuracy = {NUM_TEST_SAMPLES - incorrect_count[MAX_NUM_OBJECTS-1]}/{NUM_TEST_SAMPLES}   Unconverged = {unconverged[MAX_NUM_OBJECTS-1]}    Average iterations: {total_iters[MAX_NUM_OBJECTS-1] / (NUM_TEST_SAMPLES)}")
+        else:
+            for i in range(MAX_NUM_OBJECTS):
+                print(f"{i+1} objects: Accuracy = {NUM_TEST_SAMPLES//MAX_NUM_OBJECTS - incorrect_count[i]}/{NUM_TEST_SAMPLES//MAX_NUM_OBJECTS}   Unconverged = {unconverged[i]}    Average iterations: {total_iters[i] / (NUM_TEST_SAMPLES//MAX_NUM_OBJECTS)}")
 
     # Data Gen mode      
-    else:
+    elif action == "datagen":
         MultiConceptMNIST(test_dir, vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, single_count=SINGLE_COUNT, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True)
         MultiConceptMNIST(test_dir, vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, single_count=SINGLE_COUNT, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True)
 
