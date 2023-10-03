@@ -33,7 +33,7 @@ class MultiConceptMNIST(VisionDataset):
         num_samples: int,
         force_gen: bool = False,  # generate dataset even if it exists
         max_num_objects: int = 3,
-        max_obj_only: bool = False,   # using only `max_num_objects` for training (instead of a range)
+        single_count: bool = False,   # using only `max_num_objects` for training (instead of a range)
         num_pos_x: int = 3,
         num_pos_y: int = 3,
         num_colors: int = 7,
@@ -45,13 +45,12 @@ class MultiConceptMNIST(VisionDataset):
         if (train):
             # Allocate more samples for larger object counts for training
             total = sum([x+1 for x in range(max_num_objects)])
-            if not max_obj_only:
+            if not single_count:
                 num_samples = [round((x+1)/total * num_samples) for x in range(max_num_objects)]
         else:
-            # Even sample numbers for testing
-            num_samples = [num_samples // max_num_objects] * max_num_objects
-            # Testing should not set max_obj_only to true
-            assert(not max_obj_only)
+            if not single_count:
+                # Even sample numbers for testing
+                num_samples = [num_samples // max_num_objects] * max_num_objects
 
         assert(vsa.num_pos_x == num_pos_x)
         assert(vsa.num_pos_y == num_pos_y)
@@ -70,7 +69,7 @@ class MultiConceptMNIST(VisionDataset):
         type = "train" if train else "test"
 
         # Generate dataset if not exists
-        if max_obj_only:
+        if single_count:
             if force_gen or not self._check_exists(type, max_num_objects, num_samples):
                 raw_ds = MNIST(root=os.path.join(self.root, "../.."), train=train, download=True)
                 self.data, self.labels, self.targets = self.dataset_gen(type, raw_ds, max_num_objects, num_samples)

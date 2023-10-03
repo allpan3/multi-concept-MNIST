@@ -23,8 +23,8 @@ RUN_MODE = "TEST" # "TRAIN", "TEST", "DATAGEN"
 ALGO = "algo1" # "algo1", "algo2"
 VSA_MODE = "HARDWARE" # "SOFTWARE", "HARDWARE"
 DIM = 1024
-MAX_NUM_OBJECTS = 3
-TRAIN_MAX_OBJ_ONLY = False
+MAX_NUM_OBJECTS = 4
+SINGLE_COUNT = True
 NUM_POS_X = 3
 NUM_POS_Y = 3
 NUM_COLOR = 7
@@ -32,12 +32,12 @@ NUM_COLOR = 7
 EHD_BITS = 8
 SIM_BITS = 13
 # Train
-TRAIN_EPOCH = 30
-TRAIN_BATCH_SIZE = 256
+TRAIN_EPOCH = 10
+TRAIN_BATCH_SIZE = 128
 NUM_TRAIN_SAMPLES = 300000
 # Test
 TEST_BATCH_SIZE = 1
-NUM_TEST_SAMPLES = 300
+NUM_TEST_SAMPLES = 100
 # Resonator
 RESONATOR_TYPE = "SEQUENTIAL" # "SEQUENTIAL", "CONCURRENT"
 MAX_TRIALS = MAX_NUM_OBJECTS * 2
@@ -82,6 +82,11 @@ def train(dataloader, model, loss_fn, optimizer, num_epoch, cur_time, device = "
     # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
     # targets in VSATensor([B, D])
     for epoch in range(num_epoch):
+        if epoch != 0 and epoch % 5 == 0:
+            model_weight_loc = os.path.join(test_dir, f"model_weights_{MAX_NUM_OBJECTS}objs{'_single_count' if SINGLE_COUNT else ''}_{TRAIN_BATCH_SIZE}batch_{epoch}epoch_{NUM_TRAIN_SAMPLES}samples_{round(loss,4)}loss_{cur_time}.pt")
+            torch.save(model.state_dict(), model_weight_loc)
+            print(f"Model checkpoint saved to {model_weight_loc}")
+
         for idx, (images, labels, targets) in enumerate(tqdm(dataloader, desc=f"Train Epoch {epoch}", leave=False)):
             images = images.to(device)
             images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
@@ -126,12 +131,12 @@ def get_vsa(device):
     return vsa
 
 def get_train_data(vsa):
-    train_ds = MultiConceptMNIST(test_dir, vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, max_obj_only=TRAIN_MAX_OBJ_ONLY, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
+    train_ds = MultiConceptMNIST(test_dir, vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, single_count=SINGLE_COUNT, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
     train_dl = DataLoader(train_ds, batch_size=TRAIN_BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
     return train_dl
 
 def get_test_data(vsa):
-    test_ds = MultiConceptMNIST(test_dir, vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
+    test_ds = MultiConceptMNIST(test_dir, vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, single_count=SINGLE_COUNT, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
     test_dl = DataLoader(test_ds, batch_size=TEST_BATCH_SIZE, shuffle=False, collate_fn=collate_fn)
     return test_dl
 
@@ -424,7 +429,7 @@ if __name__ == "__main__":
         cur_time_pst = datetime.now().astimezone(timezone('US/Pacific')).strftime("%m-%d-%H-%M")
         train_dl = get_train_data(vsa)
         final_loss = train(train_dl, model, loss_fn, optimizer, num_epoch=TRAIN_EPOCH, cur_time=cur_time_pst, device=device)
-        model_weight_loc = os.path.join(test_dir, f"model_weights_{MAX_NUM_OBJECTS}objs{'_max_only' if TRAIN_MAX_OBJ_ONLY else ''}_{TRAIN_BATCH_SIZE}batch_{TRAIN_EPOCH}epoch_{NUM_TRAIN_SAMPLES}samples_{final_loss}loss_{cur_time_pst}.pt")
+        model_weight_loc = os.path.join(test_dir, f"model_weights_{MAX_NUM_OBJECTS}objs{'_single_count' if SINGLE_COUNT else ''}_{TRAIN_BATCH_SIZE}batch_{TRAIN_EPOCH}epoch_{NUM_TRAIN_SAMPLES}samples_{final_loss}loss_{cur_time_pst}.pt")
         torch.save(model.state_dict(), model_weight_loc)
         print(f"Model weights saved to {model_weight_loc}")
 
@@ -461,8 +466,8 @@ activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY
 
     # Data Gen mode      
     else:
-        MultiConceptMNIST(test_dir, vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, max_obj_only=TRAIN_MAX_OBJ_ONLY, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True)
-        MultiConceptMNIST(test_dir, vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True)
+        MultiConceptMNIST(test_dir, vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, single_count=SINGLE_COUNT, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True)
+        MultiConceptMNIST(test_dir, vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, single_count=SINGLE_COUNT, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True)
 
     
 
