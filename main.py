@@ -1,7 +1,7 @@
 
 import torch
 from model.vsa import MultiConceptMNISTVSA1, MultiConceptMNISTVSA2
-from vsa import Resonator
+from vsa import Resonator, VSA
 from dataset import MultiConceptMNIST
 from torch.utils.data import DataLoader
 import torch
@@ -22,7 +22,7 @@ SEED = 0
 ALGO = "algo1" # "algo1", "algo2"
 VSA_MODE = "HARDWARE" # "SOFTWARE", "HARDWARE"
 DIM = 1024
-MAX_NUM_OBJECTS = 3
+MAX_NUM_OBJECTS = 9
 SINGLE_COUNT = False # True, False
 NUM_POS_X = 3
 NUM_POS_Y = 3
@@ -31,15 +31,15 @@ NUM_COLOR = 7
 EHD_BITS = 9
 SIM_BITS = 13
 # Train
-TRAIN_EPOCH = 50
+TRAIN_EPOCH = 100
 TRAIN_BATCH_SIZE = 64
 NUM_TRAIN_SAMPLES = 300000
 # Test
 TEST_BATCH_SIZE = 1
-NUM_TEST_SAMPLES = 3000
+NUM_TEST_SAMPLES = 900
 # Resonator
 RESONATOR_TYPE = "SEQUENTIAL" # "SEQUENTIAL", "CONCURRENT"
-MAX_TRIALS = MAX_NUM_OBJECTS + 5
+MAX_TRIALS = MAX_NUM_OBJECTS + 9
 NUM_ITERATIONS = 200
 ACTIVATION = 'THRESH_AND_SCALE'      # 'IDENTITY', 'THRESHOLD', 'SCALEDOWN', "THRESH_AND_SCALE"
 ACT_VALUE = 16
@@ -109,15 +109,9 @@ def get_similarity(v1, v2, quantized):
     Hamming similarity is linear and should reflect the noise level
     """
     if not quantized:
-        if VSA_MODE == "SOFTWARE":
-            # Compare the quantized vectors
-            v1 = torch.where(v1 >= 0, 1, -1).to(v1.device)
-            v2 = torch.where(v2 >= 0, 1, -1).to(v1.device)
-        else:
-            v1 = torch.where(v1 >= 0, 1, 0).to(v1.device)
-            v2 = torch.where(v2 >= 0, 1, 0).to(v1.device)
-
-    return torch.sum(torch.where(v1 == v2, 1, 0), dim=-1) / DIM
+        return VSA.dot_similarity(VSA.quantize(v1), VSA.quantize(v2)) / DIM
+    else:
+        return VSA.dot_similarity(v1, v2) / DIM
             
 def get_vsa(device):
     if ALGO == "algo1":
@@ -426,11 +420,11 @@ def test_algo2(vsa, model, test_dl, device):
 
 if __name__ == "__main__":
 
-    action = sys.argv[1] # train, test, datagen
+    action = sys.argv[1] # train, test, datagen, eval
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # if action == "test":
-        # device = "cpu"
+    #     device = "cpu"
     print(f"Workload Config: algorithm = {ALGO}, vsa mode = {VSA_MODE}, dim = {DIM}, num pos x = {NUM_POS_X}, num pos y = {NUM_POS_Y}, num color = {NUM_COLOR}, num digits = 10, max num objects = {MAX_NUM_OBJECTS}")
 
     vsa = get_vsa(device)
@@ -490,6 +484,51 @@ activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY
         else:
             for i in range(MAX_NUM_OBJECTS):
                 print(f"{i+1} objects: Accuracy = {NUM_TEST_SAMPLES//MAX_NUM_OBJECTS - incorrect_count[i]}/{NUM_TEST_SAMPLES//MAX_NUM_OBJECTS}   Unconverged = {unconverged[i]}    Average iterations: {total_iters[i] / (NUM_TEST_SAMPLES//MAX_NUM_OBJECTS)}")
+
+    elif action == "eval":
+        assert TEST_BATCH_SIZE == 1, "Evaluation mode only supports batch size = 1 so far"
+        # assume we provided checkpoint path at the end of the command line
+        if sys.argv[-1].endswith(".pt") and os.path.exists(sys.argv[-1]):
+            checkpoint = torch.load(sys.argv[-1])
+            model.load_state_dict(checkpoint)
+        else:
+            print("Please provide a valid model checkpoint path.")
+            exit(1)
+
+        model.eval()
+
+        test_dl = get_test_data(vsa)
+        total_sim = [0] * MAX_NUM_OBJECTS
+        max_sim = [-DIM] * MAX_NUM_OBJECTS
+        min_sim = [DIM] * MAX_NUM_OBJECTS
+        # images in tensor([B, H, W, C])
+        # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
+        # targets in VSATensor([B, D])
+        for images, labels, targets in tqdm(test_dl, desc="Eval", leave=True if VERBOSE >= 1 else False):
+            images = images.to(device)
+            images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
+            infer_result = model(images_nchw)
+
+            # round() will round numbers near 0 to 0, which is not ideal when there's one object, since the vector should be bipolar (either 1 or -1)
+            # But 0 is legitimate when there are even number of multiple objects.
+            infer_result = infer_result.round().type(torch.int8)
+
+            vector_quantized = False if ALGO == "algo1" else True
+            sim = torch.sum(get_similarity(infer_result, targets, vector_quantized)).item()
+            total_sim[len(labels[0])-1] += sim
+            if (sim > max_sim[len(labels[0])-1]):
+                max_sim[len(labels[0])-1] = sim
+            if (sim < min_sim[len(labels[0])-1]):
+                min_sim[len(labels[0])-1] = sim
+
+        if SINGLE_COUNT:
+            print(f"{MAX_NUM_OBJECTS} objects: Average similarity = {round(total_sim[MAX_NUM_OBJECTS-1] / NUM_TEST_SAMPLES, 3)}   Max similarity = {round(max_sim[MAX_NUM_OBJECTS-1], 3)}    Min similarity = {round(min_sim[MAX_NUM_OBJECTS-1], 3)}")
+        else:
+            for i in range(MAX_NUM_OBJECTS):
+                print(f"{i+1} objects: Average similarity = {round(total_sim[i] / (NUM_TEST_SAMPLES//MAX_NUM_OBJECTS), 3)}   Max similarity = {round(max_sim[i], 3)}    Min similarity = {round(min_sim[i], 3)}")
+            
+            print(f"Avrage similarity = {round(sum(total_sim) / NUM_TEST_SAMPLES, 3)}")
+ 
 
     # Data Gen mode      
     elif action == "datagen":
