@@ -28,6 +28,7 @@ NUM_POS_X = 3
 NUM_POS_Y = 3
 NUM_COLOR = 7
 # Hardware config
+FOLD_DIM = 256
 EHD_BITS = 9
 SIM_BITS = 13
 # Train
@@ -68,7 +69,7 @@ if EARLY_CONVERGE is not None and (ACTIVATION == "SCALEDOWN" or ACTIVATION == "T
     EARLY_CONVERGE = EARLY_CONVERGE / ACT_VALUE
 
 
-test_dir = f"./tests/{VSA_MODE}-{DIM}dim-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color/{ALGO}"
+test_dir = f"./tests/{VSA_MODE}-{DIM}dim{'-' + str(FOLD_DIM) + 'fd' if VSA_MODE=='HARDWARE' else ''}-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color/{ALGO}"
 
 def collate_fn(batch):
     imgs = torch.stack([x[0] for x in batch], dim=0)
@@ -77,7 +78,7 @@ def collate_fn(batch):
     return imgs, labels, targets
 
 def train(dataloader, model, loss_fn, optimizer, num_epoch, cur_time, device = "cpu"):
-    writer = SummaryWriter(log_dir=f"./runs/{cur_time}-{ALGO}-{VSA_MODE}-{DIM}dim-{MAX_NUM_OBJECTS}objs-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color", filename_suffix=f".{TRAIN_BATCH_SIZE}batch-{TRAIN_EPOCH}epoch-{NUM_TRAIN_SAMPLES}samples")
+    writer = SummaryWriter(log_dir=f"./runs/{cur_time}-{ALGO}-{VSA_MODE}-{DIM}dim{'-' + str(FOLD_DIM) + 'fd' if VSA_MODE=='HARDWARE' else ''}-{MAX_NUM_OBJECTS}objs-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color", filename_suffix=f".{TRAIN_BATCH_SIZE}batch-{TRAIN_EPOCH}epoch-{NUM_TRAIN_SAMPLES}samples")
     # images in tensor([B, H, W, C])
     # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
     # targets in VSATensor([B, D])
@@ -115,9 +116,9 @@ def get_similarity(v1, v2, quantized):
             
 def get_vsa(device):
     if ALGO == "algo1":
-        vsa = MultiConceptMNISTVSA1(test_dir, mode=VSA_MODE, dim=DIM, max_num_objects=MAX_NUM_OBJECTS, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, ehd_bits=EHD_BITS, sim_bits=SIM_BITS, seed=SEED, device=device)
+        vsa = MultiConceptMNISTVSA1(test_dir, mode=VSA_MODE, dim=DIM, max_num_objects=MAX_NUM_OBJECTS, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, fold_dim=FOLD_DIM, ehd_bits=EHD_BITS, sim_bits=SIM_BITS, seed=SEED, device=device)
     elif ALGO == "algo2":
-        vsa = MultiConceptMNISTVSA2(test_dir, mode=VSA_MODE, dim=DIM, max_num_objects=MAX_NUM_OBJECTS, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, ehd_bits=EHD_BITS, sim_bits=SIM_BITS, seed=SEED, device=device)
+        vsa = MultiConceptMNISTVSA2(test_dir, mode=VSA_MODE, dim=DIM, max_num_objects=MAX_NUM_OBJECTS, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, fold_dim=FOLD_DIM, ehd_bits=EHD_BITS, sim_bits=SIM_BITS, seed=SEED, device=device)
     return vsa
 
 def get_train_data(vsa):
