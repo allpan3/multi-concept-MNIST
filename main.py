@@ -17,13 +17,13 @@ from pytz import timezone
 ###########
 # Configs #
 ###########
-VERBOSE = 2
+VERBOSE = 1
 SEED = 0
 ALGO = "algo1" # "algo1", "algo2"
 VSA_MODE = "HARDWARE" # "SOFTWARE", "HARDWARE"
 DIM = 1024
 MAX_NUM_OBJECTS = 9
-SINGLE_COUNT = False # True, False
+SINGLE_COUNT = True # True, False
 NUM_POS_X = 3
 NUM_POS_Y = 3
 NUM_COLOR = 7
@@ -37,7 +37,7 @@ TRAIN_BATCH_SIZE = 256
 NUM_TRAIN_SAMPLES = 300000
 # Test
 TEST_BATCH_SIZE = 1
-NUM_TEST_SAMPLES = 900
+NUM_TEST_SAMPLES = 100
 # Resonator
 RESONATOR_TYPE = "SEQUENTIAL" # "SEQUENTIAL", "CONCURRENT"
 MAX_TRIALS = MAX_NUM_OBJECTS + 9
@@ -439,7 +439,7 @@ def test_algo2(vsa, model, test_dl, device):
 
 if __name__ == "__main__":
 
-    action = sys.argv[1] # train, test, datagen, eval
+    action = sys.argv[1] # train, test, datagen, eval, reason
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if action == "test":
@@ -454,7 +454,7 @@ if __name__ == "__main__":
 
         if sys.argv[-1].endswith(".pt"):
             if os.path.exists(sys.argv[-1]):
-                checkpoint = torch.load(sys.argv[-1])
+                checkpoint = torch.load(sys.argv[-1], map_location=device)
                 model.load_state_dict(checkpoint)
                 print(f"On top of checkpoint {sys.argv[-1]}")
             else:
@@ -476,7 +476,7 @@ if __name__ == "__main__":
 
         # assume we provided checkpoint path at the end of the command line
         if sys.argv[-1].endswith(".pt") and os.path.exists(sys.argv[-1]):
-            checkpoint = torch.load(sys.argv[-1])
+            checkpoint = torch.load(sys.argv[-1], map_location=device)
             model.load_state_dict(checkpoint)
         else:
             print("Please provide a valid model checkpoint path.")
@@ -508,7 +508,7 @@ activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY
         assert TEST_BATCH_SIZE == 1, "Evaluation mode only supports batch size = 1 so far"
         # assume we provided checkpoint path at the end of the command line
         if sys.argv[-1].endswith(".pt") and os.path.exists(sys.argv[-1]):
-            checkpoint = torch.load(sys.argv[-1])
+            checkpoint = torch.load(sys.argv[-1], map_location=device)
             model.load_state_dict(checkpoint)
         else:
             print("Please provide a valid model checkpoint path.")
