@@ -17,7 +17,7 @@ from pytz import timezone
 ###########
 # Configs #
 ###########
-VERBOSE = 1
+VERBOSE = 2
 SEED = 0
 ALGO = "algo1" # "algo1", "algo2"
 VSA_MODE = "HARDWARE" # "SOFTWARE", "HARDWARE"
@@ -33,7 +33,7 @@ EHD_BITS = 9
 SIM_BITS = 13
 # Train
 TRAIN_EPOCH = 100
-TRAIN_BATCH_SIZE = 64
+TRAIN_BATCH_SIZE = 256
 NUM_TRAIN_SAMPLES = 300000
 # Test
 TEST_BATCH_SIZE = 1
@@ -47,8 +47,8 @@ ACT_VALUE = 16
 STOCHASTICITY = "SIMILARITY"  # apply stochasticity: "NONE", "SIMILARITY", "VECTOR"
 RANDOMNESS = 0.04
 # Similarity thresholds are affected by the maximum number of vectors superposed. These values need to be lowered when more vectors are superposed
-SIM_EXPLAIN_THRESHOLD = 0.25
-SIM_DETECT_THRESHOLD = 0.15
+SIM_EXPLAIN_THRESHOLD = 0.2
+SIM_DETECT_THRESHOLD = 0.12
 ENERGY_THRESHOLD = 0.25
 EARLY_CONVERGE = 0.6
 EARLY_TERM_THRESHOLD = 0.15
@@ -103,9 +103,27 @@ def train(dataloader, model, loss_fn, optimizer, num_epoch, cur_time, device = "
 
     return round(loss.item(), 4)
 
-def get_similarity(v1, v2, quantized):
+def get_hamming_similarity(v1, v2, quantized):
     """
     Return the hamming similarity.
+    Always compare the similarity between quantized vectors. If inputs are not quantized, quantize them first.
+    Hamming similarity is linear and should reflect the noise level
+    """
+    if not quantized:
+        if VSA_MODE == "SOFTWARE":
+            # Compare the quantized vectors
+            v1 = torch.where(v1 >= 0, 1, -1).to(v1.device)
+            v2 = torch.where(v2 >= 0, 1, -1).to(v1.device)
+        else:
+            v1 = torch.where(v1 >= 0, 1, 0).to(v1.device)
+            v2 = torch.where(v2 >= 0, 1, 0).to(v1.device)
+
+    return torch.sum(torch.where(v1 == v2, 1, 0), dim=-1) / DIM
+
+
+def get_dot_similarity(v1, v2, quantized):
+    """
+    Return the dot similarity.
     Always compare the similarity between quantized vectors. If inputs are not quantized, quantize them first.
     Hamming similarity is linear and should reflect the noise level
     """
@@ -286,14 +304,14 @@ def test_algo1(vsa, model, test_dl, device):
                     message += "Object {} is correctly detected.".format(label[j]) + "\n"
 
                 # Collect per-object similarity
-                sim_per_obj.append(round(get_similarity(infer_result[i], vsa.lookup([label[j]]), False).item(), 3))
+                sim_per_obj.append(round(get_dot_similarity(infer_result[i], vsa.lookup([label[j]]), False).item(), 3))
 
             if incorrect:
                 unconverged[len(label)-1][1] += convergence
                 incorrect_count[len(label)-1] += 1
                 if (VERBOSE >= 1):
                     print(Fore.BLUE + f"Test {n} Failed" + Fore.RESET)
-                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], False).item()))
+                    print("Inference result similarity = {:.3f}".format(get_hamming_similarity(infer_result[i], targets[i], False).item()))
                     print("Per-object similarity = {}".format(sim_per_obj))
                     print(f"Unconverged: {convergence}")
                     print(f"Iterations: {iter}")
@@ -304,7 +322,7 @@ def test_algo1(vsa, model, test_dl, device):
                 unconverged[len(label)-1][0] += convergence
                 if (VERBOSE >= 2):
                     print(Fore.BLUE + f"Test {n} Passed" + Fore.RESET)
-                    print("Inference result similarity = {:.3f}".format(get_similarity(infer_result[i], targets[i], False).item()))
+                    print("Inference result similarity = {:.3f}".format(get_hamming_similarity(infer_result[i], targets[i], False).item()))
                     print("Per-object similarity = {}".format(sim_per_obj))
                     print(f"Unconverged: {convergence}")
                     print(f"Iterations: {iter}")
@@ -424,8 +442,8 @@ if __name__ == "__main__":
     action = sys.argv[1] # train, test, datagen, eval
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    # if action == "test":
-    #     device = "cpu"
+    if action == "test":
+        device = "cpu"
     print(f"Workload Config: algorithm = {ALGO}, vsa mode = {VSA_MODE}, dim = {DIM}, num pos x = {NUM_POS_X}, num pos y = {NUM_POS_Y}, num color = {NUM_COLOR}, num digits = 10, max num objects = {MAX_NUM_OBJECTS}")
 
     vsa = get_vsa(device)
@@ -515,8 +533,16 @@ activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY
             infer_result = infer_result.round().type(torch.int8)
 
             vector_quantized = False if ALGO == "algo1" else True
-            sim = torch.sum(get_similarity(infer_result, targets, vector_quantized)).item()
+            # sim = torch.sum(get_hamming_similarity(infer_result, targets, vector_quantized)).item()
+            # Makes more sense to look at the average of per-object similarities, which ultimately determines whether all objects can be extracted
+            per_test_sim = 0
+            for label in labels[0]:
+                per_test_sim += get_dot_similarity(infer_result, vsa.lookup([label]), vector_quantized).item()
+            
+            sim = per_test_sim / len(labels[0])
+
             total_sim[len(labels[0])-1] += sim
+
             if (sim > max_sim[len(labels[0])-1]):
                 max_sim[len(labels[0])-1] = sim
             if (sim < min_sim[len(labels[0])-1]):
