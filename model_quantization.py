@@ -1,5 +1,5 @@
 import numpy as np
-from main import DIM, get_test_data, get_vsa
+from main import DIM, get_test_data, get_vsa, get_cos_similarity
 from model.nn_non_decomposed import MultiConceptNonDecomposed
 import torch
 import torchvision
@@ -313,26 +313,35 @@ def quantize_averaging_layer(model: nn.Module):
     model.model.fc.register_forward_pre_hook(lambda layer, x: x[0].round())
 
 def test(model, dataloader, max_iter=40):
-    for idx, (images, _, _) in enumerate(dataloader):
+    loss_fn = torch.nn.MSELoss()
+    sims = []
+    for idx, (images, labels, targets, _) in enumerate(dataloader):
         images = images.to(device)
         images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
         images_nchw.requires_grad = False
-        _ = model(images_nchw)
+        targets_float = targets.to(device).type(torch.float32)
+        output = model(images_nchw)
+        loss = loss_fn(output/100, targets_float)
+        sim = torch.sum(get_cos_similarity(output, targets_float)).item()
+        sims.append(sim)
         if idx >= max_iter:
+            print(output)
             break
+    print(sum(sims)/len(sims))
 
 if __name__ == "__main__":
     model = get_model()
-    vsa = get_vsa(device)
-    train_dl = get_test_data(vsa)
+    state_dict = torch.load("/home/aifusenno1/multi-concept-MNIST/tests/HARDWARE-1024dim-3x-3y-7color/algo1/model_weights_3objs_64batch_10epoch_300000samples_0.049loss_10-03-10-53.pt")
+    model.load_state_dict(state_dict)
     model.eval()
-    sample_input = torch.ones(1,3,25,25, device=device)
-    print(model(sample_input))
+    vsa = get_vsa(device)
+    test_dl = get_test_data(vsa)
+    test(model, test_dl, max_iter=40)
     merge_biases(model)
     remove_biases(model)
-    print(model(sample_input))
+    test(model, test_dl, max_iter=40)
     stop_profiling = register_activation_profiling_hooks(model)
-    test(model, train_dl, max_iter=10)
+    test(model, test_dl, max_iter=40)
     print("Stop profiling")
     stop_profiling()
     print("Quantize weights")
@@ -345,7 +354,4 @@ if __name__ == "__main__":
     quantize_averaging_layer(model)
     print("Quantize biases")
     quantize_layer_biases(model)
-    print(model(sample_input))
-    # import pdb; pdb.set_trace()
-
-    # print(model)
+    test(model, test_dl, max_iter=10)
