@@ -14,12 +14,13 @@ class MultiConceptMNISTVSA1(VSA):
             num_pos_x = 3,
             num_pos_y = 3,
             num_colors = 7,
+            fold_dim = 256,
             ehd_bits = 8,
             sim_bits = 13,
             seed: None or int = None,  # random seed
             device = "cpu"):
 
-        super().__init__(root, mode, dim, num_factors = 4, num_codevectors = (num_pos_x, num_pos_y, num_colors, 10), ehd_bits = ehd_bits, sim_bits = sim_bits, seed = seed, device = device)
+        super().__init__(root, mode, dim, num_factors = 4, num_codevectors = (num_pos_x, num_pos_y, num_colors, 10), fold_dim = fold_dim, ehd_bits = ehd_bits, sim_bits = sim_bits, seed = seed, device = device)
 
         self.num_pos_x = num_pos_x
         self.num_pos_y = num_pos_y
@@ -47,6 +48,7 @@ class MultiConceptMNISTVSA2(VSA):
         num_pos_x = 3,
         num_pos_y = 3,
         num_colors = 7,
+        fold_dim = 256,
         ehd_bits = 8,
         sim_bits = 13,
         seed: None or int = None,  # random seed
@@ -57,7 +59,7 @@ class MultiConceptMNISTVSA2(VSA):
         self.num_pos_x = num_pos_x
         self.num_pos_y = num_pos_y
         self.num_colors = num_colors
-        super().__init__(root, mode, dim, num_factors = 5, num_codevectors = (num_pos_x, num_pos_y, num_colors, 10, self.num_id), ehd_bits = ehd_bits, sim_bits = sim_bits, seed = seed, device = device)
+        super().__init__(root, mode, dim, num_factors = 5, num_codevectors = (num_pos_x, num_pos_y, num_colors, 10, self.num_id), fold_dim = fold_dim, ehd_bits = ehd_bits, sim_bits = sim_bits, seed = seed, device = device)
 
         self.id_codebook = self.codebooks[-1]
         self.x_codebook = self.codebooks[0]

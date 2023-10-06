@@ -8,4 +8,5 @@ clean-codebooks: clean-samples
 	rm -rf tests/*/*/codebooks.pt
 
 clean-all: clean-samples clean-codebooks
+	rm -rf tests/MNIST
 	find tests -type d -empty -delete
