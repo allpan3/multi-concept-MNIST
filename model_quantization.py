@@ -1,5 +1,5 @@
 import numpy as np
-from main import DIM, get_test_data, get_vsa, get_cos_similarity
+# from main import DIM, get_test_data, get_vsa, get_cos_similarity
 from model.nn_non_decomposed import MultiConceptNonDecomposed
 import torch
 import torchvision
@@ -8,9 +8,9 @@ from torch import nn
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-def get_model():
-    model = MultiConceptNonDecomposed(dim=DIM, device=device)
-    return model
+# def get_model():
+#     model = MultiConceptNonDecomposed(dim=DIM, device=device)
+#     return model
 
 def flattened_children(model: nn.Module) -> List[nn.Module]:
     result = []
@@ -322,26 +322,20 @@ def test(model, dataloader, max_iter=40):
         targets_float = targets.to(device).type(torch.float32)
         output = model(images_nchw)
         loss = loss_fn(output/100, targets_float)
-        sim = torch.sum(get_cos_similarity(output, targets_float)).item()
-        sims.append(sim)
+        # sim = torch.sum(get_cos_similarity(output, targets_float)).item()
+        # sims.append(sim)
         if idx >= max_iter:
             print(output)
             break
-    print(sum(sims)/len(sims))
+    # print(sum(sims)/len(sims))
 
-if __name__ == "__main__":
-    model = get_model()
-    state_dict = torch.load("/home/aifusenno1/multi-concept-MNIST/tests/HARDWARE-1024dim-3x-3y-7color/algo1/model_weights_3objs_64batch_10epoch_300000samples_0.049loss_10-03-10-53.pt")
-    model.load_state_dict(state_dict)
-    model.eval()
-    vsa = get_vsa(device)
-    test_dl = get_test_data(vsa)
-    test(model, test_dl, max_iter=40)
+def quantize_model(model: nn.Module, dataloader):
+    test(model, dataloader, max_iter=40)
     merge_biases(model)
     remove_biases(model)
-    test(model, test_dl, max_iter=40)
+    test(model, dataloader, max_iter=40)
     stop_profiling = register_activation_profiling_hooks(model)
-    test(model, test_dl, max_iter=40)
+    test(model, dataloader, max_iter=40)
     print("Stop profiling")
     stop_profiling()
     print("Quantize weights")
@@ -354,4 +348,36 @@ if __name__ == "__main__":
     quantize_averaging_layer(model)
     print("Quantize biases")
     quantize_layer_biases(model)
-    test(model, test_dl, max_iter=10)
+    test(model, dataloader, max_iter=40)
+
+
+# if __name__ == "__main__":
+#     model = get_model()
+#     if sys.argv[-1].endswith(".pt") and os.path.exists(sys.argv[-1]):
+#         checkpoint = torch.load(sys.argv[-1], map_location=device)
+#         model.load_state_dict(checkpoint)
+#     else:
+#         print("Please provide a valid model checkpoint path.")
+#         exit(1)
+#     model.eval()
+#     vsa = get_vsa(device)
+#     test_dl = get_test_data(vsa)
+#     test(model, test_dl, max_iter=40)
+#     merge_biases(model)
+#     remove_biases(model)
+#     test(model, test_dl, max_iter=40)
+#     stop_profiling = register_activation_profiling_hooks(model)
+#     test(model, test_dl, max_iter=40)
+#     print("Stop profiling")
+#     stop_profiling()
+#     print("Quantize weights")
+#     quantize_layer_weights(model)
+#     print("Quantize activations")
+#     quantize_activations(model)
+#     print("Quantize bottleneck layers")
+#     quantize_bottleneck_layers(model)
+#     print("Quantize averaging layer")
+#     quantize_averaging_layer(model)
+#     print("Quantize biases")
+#     quantize_layer_biases(model)
+#     test(model, test_dl, max_iter=10)

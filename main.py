@@ -14,6 +14,7 @@ import sys
 import os
 from datetime import datetime
 from pytz import timezone
+from model_quantization import quantize_model
 
 ###########
 # Configs #
@@ -22,6 +23,7 @@ VERBOSE = 1
 SEED = 0
 ALGO = "algo1" # "algo1", "algo2"
 VSA_MODE = "HARDWARE" # "SOFTWARE", "HARDWARE"
+QUANTIZE_MODEL = True
 DIM = 1024
 MAX_NUM_OBJECTS = 9
 SINGLE_COUNT = False # True, False
@@ -38,7 +40,7 @@ TRAIN_BATCH_SIZE = 256
 NUM_TRAIN_SAMPLES = 300
 # Test
 TEST_BATCH_SIZE = 1
-NUM_TEST_SAMPLES = 900
+NUM_TEST_SAMPLES = 9
 # Resonator
 RESONATOR_TYPE = "SEQUENTIAL" # "SEQUENTIAL", "CONCURRENT"
 MAX_TRIALS = MAX_NUM_OBJECTS + 10
@@ -274,10 +276,13 @@ def test_algo1(vsa, model, test_dl, device):
         images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
         infer_result = model(images_nchw)
 
-        # print(infer_result.tolist())
-        # round() will round numbers near 0 to 0, which is not ideal when there's one object, since the vector should be bipolar
-        # But 0 is legitimate when there are multiple objects.
-        infer_result = infer_result.round().type(torch.int8)
+        if QUANTIZE_MODEL:
+            #todo
+            pass
+        else:
+            # round() will round numbers near 0 to 0, which is not ideal when there's one object, since the vector should be bipolar (either 1 or -1)
+            # But 0 is legitimate when there are even number of multiple objects.
+            infer_result = infer_result.round().type(torch.int8)
 
         # Factorization
         outcomes, convergences, iters, counts, debug_message = factorization_algo1(vsa, rn, infer_result, init_estimates)
@@ -620,7 +625,10 @@ activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY
 """ + Fore.RESET)
 
         test_dl = get_test_data(vsa)
- 
+
+        if QUANTIZE_MODEL:
+            quantize_model(model, test_dl)
+
         if ALGO == "algo1":
             incorrect_count, unconverged, total_iters = test_algo1(vsa, model, test_dl, device)
         elif ALGO == "algo2":
@@ -645,6 +653,10 @@ activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY
         model.eval()
 
         test_dl = get_test_data(vsa)
+
+        if QUANTIZE_MODEL:
+            quantize_model(model, test_dl)
+
         total_sim = [0] * MAX_NUM_OBJECTS
         max_sim = [-DIM] * MAX_NUM_OBJECTS
         min_sim = [DIM] * MAX_NUM_OBJECTS
@@ -656,9 +668,13 @@ activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY
             images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
             infer_result = model(images_nchw)
 
-            # round() will round numbers near 0 to 0, which is not ideal when there's one object, since the vector should be bipolar (either 1 or -1)
-            # But 0 is legitimate when there are even number of multiple objects.
-            infer_result = infer_result.round().type(torch.int8)
+            if QUANTIZE_MODEL:
+                #todo
+                pass
+            else:
+                # round() will round numbers near 0 to 0, which is not ideal when there's one object, since the vector should be bipolar (either 1 or -1)
+                # But 0 is legitimate when there are even number of multiple objects.
+                infer_result = infer_result.round().type(torch.int8)
 
             vector_quantized = False if ALGO == "algo1" else True
             sim = torch.sum(get_cos_similarity(infer_result, targets)).item()
