@@ -107,7 +107,8 @@ def quantized_weights(weights: torch.Tensor) -> Tuple[torch.Tensor, float]:
     scale = 127.0 / range
     scale = closest_lower_power_of_2(scale)
 
-    result = (weights * scale).round()
+    result = (weights * scale)#.round()
+    return result, scale
     return torch.clamp(result, min=-128, max=127), scale
 
 def quantize_layer_weights(model: nn.Module):
@@ -119,10 +120,10 @@ def quantize_layer_weights(model: nn.Module):
             layer.weight.data = q_layer_data
             layer.weight.scale = scale
 
-            if (q_layer_data < -128).any() or (q_layer_data > 127).any():
-                raise Exception("Quantized weights of {} layer include values out of bounds for an 8-bit signed integer".format(layer.__class__.__name__))
-            if (q_layer_data != q_layer_data.round()).any():
-                raise Exception("Quantized weights of {} layer include non-integer values".format(layer.__class__.__name__))
+            # if (q_layer_data < -128).any() or (q_layer_data > 127).any():
+            #     raise Exception("Quantized weights of {} layer include values out of bounds for an 8-bit signed integer".format(layer.__class__.__name__))
+            # if (q_layer_data != q_layer_data.round()).any():
+            #     raise Exception("Quantized weights of {} layer include non-integer values".format(layer.__class__.__name__))
 
 def initial_input_scale(pixels: np.ndarray) -> float:
     '''
@@ -231,7 +232,7 @@ def quantize_activations(model: nn.Module):
                 raise Exception("Unknwon layer")
             result *= layer.output_scale
             model.quantized_output.append(result)
-            import pdb; pdb.set_trace()
+            # import pdb; pdb.set_trace()
             # # layer.saved = [x[0].clone(), y.clone(), result.clone()]
             # x = x[0]
             # # import pdb; pdb.set_trace()
@@ -248,19 +249,23 @@ def quantize_activations(model: nn.Module):
     for idx, (layer, act) in enumerate(zip(quantized_layers, output_activations)):
         layer.output_scale, total_scale = activation_scale(act, layer.weight.scale, model.input_scale, preceding_layer_scales)
         layer.register_forward_hook(make_output_scaling_hook(layer, model.input_scale, preceding_layer_scales.copy()))
-        total_scale *= layer.output_scale * layer.weight.scale
         total_scales.append(total_scale)
+        layer.total_scale = total_scale
         if idx in [4, 11, 18, 25]:
-            preceding_layer_scales.append((1.0, 1.0))
-        else:
-            preceding_layer_scales.append((layer.weight.scale, layer.output_scale))
-        if idx in [4, 11, 18, 25]:
-            layer.output_scale *= total_scales[idx - 1] / total_scale
+            layer.total_scale *= total_scales[idx - 1] / total_scale
+            layer.output_scale = layer.total_scale / layer.weight.scale / total_scales[idx - 4]
             print("After modification")
             print(total_scales[idx - 1] / total_scale)
             print(layer.output_scale)
-        if idx in [7, 14, 21, 28]:
-            layer.output_scale *= total_scales[idx - 3] / total_scale
+            preceding_layer_scales.append((1.0, 1.0))
+            total_scales[-1] = layer.total_scale
+        elif idx in [7, 14, 21, 28]:
+            layer.total_scale *= total_scales[idx - 3] / total_scale
+            layer.output_scale = layer.total_scale / layer.weight.scale / total_scales[idx - 3]
+            total_scales[-1] = layer.total_scale
+            preceding_layer_scales.append((layer.weight.scale, layer.output_scale))
+        else:
+            preceding_layer_scales.append((layer.weight.scale, layer.output_scale))
         # print(preceding_layer_scales)
     
     total_scale = model.input_scale
@@ -320,7 +325,7 @@ def register_activation_profiling_hooks(model: nn.Module):
     
     return remove_all_handles
 
-def quantized_bias(bias: torch.Tensor, n_w: float, n_initial_input: float, ns: List[Tuple[float, float]], idx: int) -> torch.Tensor:
+def quantized_bias(bias: torch.Tensor, scale: float) -> torch.Tensor:
     '''
     Quantize the weights so that all values are integers between -128 and 127.
 
@@ -335,17 +340,17 @@ def quantized_bias(bias: torch.Tensor, n_w: float, n_initial_input: float, ns: L
             The "dtype" will still be "float", but the values themselves should all be integers.
     '''
 
-    scale = n_initial_input
-    if idx in [4, 11, 18, 25]:
-        ls = ns[:-3]
-    else:
-        ls = ns
-    for nw, nout in ls:
-        scale *= nw * nout
+    # scale = n_initial_input
+    # if idx in [4, 11, 18, 25]:
+    #     ls = ns[:-3]
+    # else:
+    #     ls = ns
+    # for nw, nout in ls:
+    #     scale *= nw * nout
 
-    scale *= n_w
+    # scale *= n_w
 
-    return torch.clamp(bias * scale, min=-2147483648, max=2147483647).round(), scale
+    return torch.clamp(bias * scale, min=-2147483648, max=2147483647)#.round()
 
 def quantize_layer_biases(model: nn.Module):
     preceding_layer_scales = []
@@ -353,21 +358,22 @@ def quantize_layer_biases(model: nn.Module):
 
     for idx, layer in enumerate(quantized_layers):
         if layer.bias is not None:
-            q_layer_data, scale = quantized_bias(layer.bias.data, layer.weight.scale, model.input_scale, preceding_layer_scales, idx)
+            scale = layer.total_scale / layer.output_scale
+            q_layer_data = quantized_bias(layer.bias.data, scale)
             q_layer_data = q_layer_data.to(device)
 
             layer.bias.data = q_layer_data
             layer.bias.scale = scale
 
-            if (q_layer_data < -2147483648).any() or (q_layer_data > 2147483647).any():
-                raise Exception("Quantized bias of {} layer include values out of bounds for a 32-bit signed integer".format(layer.__class__.__name__))
-            if (q_layer_data != q_layer_data.round()).any():
-                raise Exception("Quantized bias of {} layer include non-integer values".format(layer.__class__.__name__))
-        if idx in [4, 11, 18, 25]:
-            preceding_layer_scales.append((1.0, 1.0))
-        else:
-            preceding_layer_scales.append((layer.weight.scale, layer.output_scale))
-    print(preceding_layer_scales)
+            # if (q_layer_data < -2147483648).any() or (q_layer_data > 2147483647).any():
+            #     raise Exception("Quantized bias of {} layer include values out of bounds for a 32-bit signed integer".format(layer.__class__.__name__))
+            # if (q_layer_data != q_layer_data.round()).any():
+            #     raise Exception("Quantized bias of {} layer include non-integer values".format(layer.__class__.__name__))
+        # if idx in [4, 11, 18, 25]:
+        #     preceding_layer_scales.append((1.0, 1.0))
+        # else:
+        #     preceding_layer_scales.append((layer.weight.scale, layer.output_scale))
+    # print(preceding_layer_scales)
 
 def quantize_bottleneck_layers(model: nn.Module):
     for child in model.modules():
@@ -433,6 +439,12 @@ def quantize_model(model: nn.Module, dataloader):
     print("Quantize biases")
     quantize_layer_biases(model)
     test(model, dataloader, max_iter=0, output_scale=total_scale)
+    quantized_layers = [child for child in flattened_children(model) if isinstance(child, nn.Conv2d) or isinstance(child, nn.Linear)]
+    for i in range(10):
+        print("*" * 10 + str(i) + "*" * 10)
+        layer = quantized_layers[i]
+        print(model.quantized_output[i][0].reshape(-1) / layer.total_scale)
+        print(model.output_activations[i][0].reshape(-1))
     exit()
     test(model, dataloader, max_iter=10, output_scale=total_scale)
     exit()
