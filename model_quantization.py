@@ -232,10 +232,12 @@ def quantize_activations(model: nn.Module):
                 raise Exception("Unknwon layer")
             result *= layer.output_scale
             model.quantized_output.append(result)
-            # import pdb; pdb.set_trace()
+            if isinstance(layer, nn.Conv2d):
+                if layer.in_channels == 64 and layer.out_channels == 256:
+                    import pdb; pdb.set_trace()
             # # layer.saved = [x[0].clone(), y.clone(), result.clone()]
             # x = x[0]
-            # # import pdb; pdb.set_trace()
+            # import pdb; pdb.set_trace()
             # if (x < -128).any() or (x > 127).any():
             #     # import pdb; pdb.set_trace()
             #     raise Exception("Input to {} layer is out of bounds for an 8-bit signed integer".format(layer.__class__.__name__))
