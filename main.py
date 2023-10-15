@@ -1,12 +1,12 @@
 
 import torch
-from model.vsa import MultiConceptMNISTVSA1, MultiConceptMNISTVSA2
+from models.vsa import MultiConceptMNISTVSA1, MultiConceptMNISTVSA2
 from vsa import Resonator, VSA
-from dataset import MultiConceptMNIST
+from datasets.dataset import MultiConceptMNIST
 from torch.utils.data import DataLoader
 import torch
 from tqdm import tqdm
-from model.nn_non_decomposed import MultiConceptNonDecomposed
+from models.nn_non_decomposed import MultiConceptNonDecomposed
 from itertools import chain
 from colorama import Fore
 from torch.utils.tensorboard import SummaryWriter
@@ -15,6 +15,7 @@ import os
 from datetime import datetime
 from pytz import timezone
 from model_quantization import quantize_model
+import torchvision.transforms as transforms
 
 ###########
 # Configs #
@@ -23,9 +24,9 @@ VERBOSE = 1
 SEED = 0
 ALGO = "algo1" # "algo1", "algo2"
 VSA_MODE = "HARDWARE" # "SOFTWARE", "HARDWARE"
-QUANTIZE_MODEL = True
+QUANTIZE_MODEL = False
 DIM = 1024
-MAX_NUM_OBJECTS = 9
+MAX_NUM_OBJECTS = 3
 SINGLE_COUNT = False # True, False
 NUM_POS_X = 3
 NUM_POS_Y = 3
@@ -40,7 +41,7 @@ TRAIN_BATCH_SIZE = 256
 NUM_TRAIN_SAMPLES = 300
 # Test
 TEST_BATCH_SIZE = 1
-NUM_TEST_SAMPLES = 9
+NUM_TEST_SAMPLES = 300
 # Resonator
 RESONATOR_TYPE = "SEQUENTIAL" # "SEQUENTIAL", "CONCURRENT"
 MAX_TRIALS = MAX_NUM_OBJECTS + 10
@@ -89,7 +90,7 @@ def collate_test_fn(batch):
 
 def train(dataloader, model, loss_fn, optimizer, num_epoch, cur_time, device = "cpu"):
     writer = SummaryWriter(log_dir=f"./runs/{cur_time}-{ALGO}-{VSA_MODE}-{DIM}dim{'-' + str(FOLD_DIM) + 'fd' if VSA_MODE=='HARDWARE' else ''}-{MAX_NUM_OBJECTS}objs-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color", filename_suffix=f".{TRAIN_BATCH_SIZE}batch-{TRAIN_EPOCH}epoch-{NUM_TRAIN_SAMPLES}samples")
-    # images in tensor([B, H, W, C])
+    # images in tensor([B, C, H, W])
     # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
     # targets in VSATensor([B, D])
     for epoch in range(num_epoch):
@@ -100,9 +101,9 @@ def train(dataloader, model, loss_fn, optimizer, num_epoch, cur_time, device = "
 
         for idx, (images, labels, targets) in enumerate(tqdm(dataloader, desc=f"Train Epoch {epoch}", leave=False)):
             images = images.to(device)
-            images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
+            # images_nchw = (images.type(torch.float32)/255)
             targets_float = targets.to(device).type(torch.float32)
-            output = model(images_nchw)
+            output = model(images)
             loss = loss_fn(output, targets_float)
             optimizer.zero_grad()
             loss.backward()
@@ -148,13 +149,24 @@ def get_vsa(device):
         vsa = MultiConceptMNISTVSA2(test_dir, mode=VSA_MODE, dim=DIM, max_num_objects=MAX_NUM_OBJECTS, num_colors=NUM_COLOR, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, fold_dim=FOLD_DIM, ehd_bits=EHD_BITS, sim_bits=SIM_BITS, seed=SEED, device=device)
     return vsa
 
-def get_train_data(vsa):
+def get_transform(quantized):
+    if quantized:
+        return transforms.Compose([
+            transforms.Resize(224, antialias=True)
+        ])
+    else:
+        return transforms.Compose([
+            transforms.Resize(224, antialias=True),
+            transforms.ConvertImageDtype(torch.float32)  # Converts to [0, 1]
+        ])
+
+def get_train_data(vsa, transform = None):
     train_ds = MultiConceptMNIST(test_dir, vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, single_count=SINGLE_COUNT, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
     train_dl = DataLoader(train_ds, batch_size=TRAIN_BATCH_SIZE, shuffle=True, collate_fn=collate_train_fn)
     return train_dl
 
-def get_test_data(vsa):
-    test_ds = MultiConceptMNIST(test_dir, vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, single_count=SINGLE_COUNT, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR)
+def get_test_data(vsa, transform = None):
+    test_ds = MultiConceptMNIST(test_dir, vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, single_count=SINGLE_COUNT, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, transform=transform)
     test_dl = DataLoader(test_ds, batch_size=TEST_BATCH_SIZE, shuffle=False, collate_fn=collate_test_fn)
     return test_dl
 
@@ -268,13 +280,13 @@ def test_algo1(vsa, model, test_dl, device):
     unconverged = [[0,0] for _ in range(MAX_NUM_OBJECTS)]    # [correct, incorrect]
     total_iters = [0] * MAX_NUM_OBJECTS
     n = 0
-    # images in tensor([B, H, W, C])
+    # images in tensor([B, C, H, W])
     # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
     # targets in VSATensor([B, D])
     for images, labels, targets, _ in tqdm(test_dl, desc="Test", leave=True if VERBOSE >= 1 else False):
-        images = images.to(device)
-        images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
-        infer_result = model(images_nchw)
+        images= images.to(device)
+        # images_nchw = (images.type(torch.float32)/255)
+        infer_result = model(images)
 
         if QUANTIZE_MODEL:
             #todo
@@ -402,15 +414,12 @@ def test_algo2(vsa, model, test_dl, device):
     # unconverged = [[0,0] for _ in range(MAX_NUM_OBJECTS)]    # [correct, incorrect]
     # n = 0
 
-    # # images in tensor([B, H, W, C])
-    # # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
-    # # targets in VSATensor([B, D])
     # for images, labels, targets in tqdm(test_dl, desc="Test", leave=True if VERBOSE >= 1 else False):
 
     #     # Inference
     #     images = images.to(device)
-    #     images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
-    #     infer_result = model(images_nchw)
+    # # images_nchw = (images.type(torch.float32)/255)
+    #     infer_result = model(images)
     #     if VSA_MODE == "SOFTWARE":
     #         infer_result = infer_result.round().type(torch.int8)
     #     else:
@@ -472,13 +481,10 @@ def reason_algo1(vsa, model, test_dl, device):
     # unconverged = [[0,0] for _ in range(MAX_NUM_OBJECTS)]    # [correct, incorrect]
     # total_iters = [0] * MAX_NUM_OBJECTS
     n = 0
-    # images in tensor([B, H, W, C])
-    # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
-    # targets in VSATensor([B, D])
     for images, labels, targets, questions in tqdm(test_dl, desc="Reason", leave=True if VERBOSE >= 1 else False):
         images = images.to(device)
-        images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
-        infer_result = model(images_nchw)
+        # images_nchw = (images.type(torch.float32)/255)
+        infer_result = model(images)
         infer_result = infer_result.round().type(torch.int8) 
         # infer_result = targets
 
@@ -597,7 +603,7 @@ if __name__ == "__main__":
         loss_fn = torch.nn.MSELoss() if ALGO == "algo1" else torch.nn.BCEWithLogitsLoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
         cur_time_pst = datetime.now().astimezone(timezone('US/Pacific')).strftime("%m-%d-%H-%M")
-        train_dl = get_train_data(vsa)
+        train_dl = get_train_data(vsa, get_transform(QUANTIZE_MODEL))
         final_loss = train(train_dl, model, loss_fn, optimizer, num_epoch=TRAIN_EPOCH, cur_time=cur_time_pst, device=device)
         model_weight_loc = os.path.join(test_dir, f"model_weights_{MAX_NUM_OBJECTS}objs{'_single_count' if SINGLE_COUNT else ''}_{TRAIN_BATCH_SIZE}batch_{TRAIN_EPOCH}epoch_{NUM_TRAIN_SAMPLES}samples_{final_loss}loss_{cur_time_pst}.pt")
         torch.save(model.state_dict(), model_weight_loc)
@@ -624,7 +630,7 @@ resonator = {RESONATOR_TYPE}, iterations = {NUM_ITERATIONS}, stochasticity = {ST
 activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY_CONVERGE}
 """ + Fore.RESET)
 
-        test_dl = get_test_data(vsa)
+        test_dl = get_test_data(vsa, get_transform(QUANTIZE_MODEL))
 
         if QUANTIZE_MODEL:
             quantize_model(model, test_dl)
@@ -652,7 +658,7 @@ activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY
 
         model.eval()
 
-        test_dl = get_test_data(vsa)
+        test_dl = get_test_data(vsa, get_transform(QUANTIZE_MODEL))
 
         if QUANTIZE_MODEL:
             quantize_model(model, test_dl)
@@ -660,13 +666,10 @@ activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY
         total_sim = [0] * MAX_NUM_OBJECTS
         max_sim = [-DIM] * MAX_NUM_OBJECTS
         min_sim = [DIM] * MAX_NUM_OBJECTS
-        # images in tensor([B, H, W, C])
-        # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
-        # targets in VSATensor([B, D])
+
         for images, labels, targets, _ in tqdm(test_dl, desc="Eval", leave=True if VERBOSE >= 1 else False):
             images = images.to(device)
-            images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
-            infer_result = model(images_nchw)
+            infer_result = model(images)
 
             if QUANTIZE_MODEL:
                 #todo

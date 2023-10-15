@@ -28,9 +28,9 @@ class MultiConceptMNIST(VisionDataset):
     def __init__(
         self,
         root: str,
-        vsa: VSA,
-        train: bool,      # training set or test set
-        num_samples: int,
+        vsa: VSA = None,
+        train: bool = False,      # training set or test set
+        num_samples: int = 1000,
         force_gen: bool = False,  # generate dataset even if it exists
         max_num_objects: int = 3,
         single_count: bool = False,   # using only `max_num_objects` for training (instead of a range)
@@ -54,10 +54,12 @@ class MultiConceptMNIST(VisionDataset):
                 # Even sample numbers for testing
                 num_samples = [num_samples // max_num_objects] * max_num_objects
 
-        assert(vsa.num_pos_x == num_pos_x)
-        assert(vsa.num_pos_y == num_pos_y)
-        assert(vsa.num_colors == num_colors)
-        self.vsa = vsa
+        if vsa:
+            assert(vsa.num_pos_x == num_pos_x)
+            assert(vsa.num_pos_y == num_pos_y)
+            assert(vsa.num_colors == num_colors)
+            self.vsa = vsa
+
         self.num_pos_x = num_pos_x
         self.num_pos_y = num_pos_y
         self.num_colors = num_colors
@@ -74,6 +76,7 @@ class MultiConceptMNIST(VisionDataset):
         # Generate dataset if not exists
         if single_count:
             if force_gen or not self._check_exists(type, max_num_objects, num_samples):
+                assert vsa is not None, "VSA model must be provided for dataset generation"
                 raw_ds = MNIST(root=os.path.join(self.root, "../.."), train=train, download=True)
                 self.data, self.labels, self.targets, self.questions = self.dataset_gen(type, raw_ds, max_num_objects, num_samples)
             else:
@@ -81,11 +84,12 @@ class MultiConceptMNIST(VisionDataset):
                 self.data = self._load_data(os.path.join(self.root, f"{type}-images-{max_num_objects}obj-{num_samples}samples.pt"))
                 self.labels = self._load_json(os.path.join(self.root, f"{type}-labels-{max_num_objects}obj-{num_samples}samples.json"))
                 self.targets = self._load_data(os.path.join(self.root, f"{type}-targets-{max_num_objects}obj-{num_samples}samples.pt"))
-                self.questions += self._load_json(os.path.join(self.root, f"{type}-questions-{max_num_objects}obj-{num_samples}samples.json"))
+                self.questions = self._load_json(os.path.join(self.root, f"{type}-questions-{max_num_objects}obj-{num_samples}samples.json"))
         else:
             for i in range(0, self.max_num_objects):
                 n = i + 1
                 if force_gen or not self._check_exists(type, n, num_samples[i]):
+                    assert vsa is not None, "VSA model must be provided for dataset generation"
                     raw_ds = MNIST(root=os.path.join(self.root, "../.."), train=train, download=True)
                     data, labels, targets, questions = self.dataset_gen(type, raw_ds, n, num_samples[i])
                     self.data += data
@@ -98,7 +102,11 @@ class MultiConceptMNIST(VisionDataset):
                     self.labels += self._load_json(os.path.join(self.root, f"{type}-labels-{n}obj-{num_samples[i]}samples.json"))
                     self.targets += self._load_data(os.path.join(self.root, f"{type}-targets-{n}obj-{num_samples[i]}samples.pt"))
                     self.questions += self._load_json(os.path.join(self.root, f"{type}-questions-{n}obj-{num_samples[i]}samples.json"))
- 
+        
+        self.data = torch.stack(self.data)
+        if transform:
+            self.data = transform(self.data)
+
     def _check_exists(self, type: str, num_obj, num_samples) -> bool:
         if type == "train":
             return all(
@@ -163,8 +171,8 @@ class MultiConceptMNIST(VisionDataset):
 
         for i in tqdm(range(num_samples), desc=f"Generating {num_samples} samples of {num_objs}-object images", leave=False):
             # num_pos_x by num_pos_y grid, each grid 28x28 pixels, color (3-dim uint8 tuple)
-            # [H, W, C]
-            image_tensor = torch.zeros(28*self.num_pos_y, 28*self.num_pos_x, 3, dtype=torch.uint8)
+            # [C, H, W]
+            image_tensor = torch.zeros(3, 28*self.num_pos_y, 28*self.num_pos_x, dtype=torch.uint8)
             label = []
             label_uni = set() # Check the coverage of generation
 
@@ -177,7 +185,7 @@ class MultiConceptMNIST(VisionDataset):
                 mnist_idx = random.randint(0, 59999 if raw_ds.train else 9999)
                 digit_image = raw_ds.data[mnist_idx, :, :]
                 for k in self.COLOR_SET[color_idx]:
-                    image_tensor[pos_y*28:(pos_y+1)*28, pos_x*28:(pos_x+1)*28, k] = digit_image
+                    image_tensor[k, pos_y*28:(pos_y+1)*28, pos_x*28:(pos_x+1)*28] = digit_image
                 digit = raw_ds.targets[mnist_idx].item()
                 
                 object = {
