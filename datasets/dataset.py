@@ -65,7 +65,10 @@ class MultiConceptMNIST(VisionDataset):
         self.num_colors = num_colors
         assert(max_num_objects <= num_pos_x * num_pos_y)
         self.max_num_objects = max_num_objects
-        
+
+        if transform is None:
+            self.transform = lambda x: x
+ 
         self.data = []
         self.labels = []
         self.targets = []
@@ -84,7 +87,8 @@ class MultiConceptMNIST(VisionDataset):
                 self.data = self._load_data(os.path.join(self.root, f"{type}-images-{max_num_objects}obj-{num_samples}samples.pt"))
                 self.labels = self._load_json(os.path.join(self.root, f"{type}-labels-{max_num_objects}obj-{num_samples}samples.json"))
                 self.targets = self._load_data(os.path.join(self.root, f"{type}-targets-{max_num_objects}obj-{num_samples}samples.pt"))
-                self.questions = self._load_json(os.path.join(self.root, f"{type}-questions-{max_num_objects}obj-{num_samples}samples.json"))
+                if not train:
+                    self.questions = self._load_json(os.path.join(self.root, f"{type}-questions-{max_num_objects}obj-{num_samples}samples.json"))
         else:
             for i in range(0, self.max_num_objects):
                 n = i + 1
@@ -101,11 +105,9 @@ class MultiConceptMNIST(VisionDataset):
                     self.data += self._load_data(os.path.join(self.root, f"{type}-images-{n}obj-{num_samples[i]}samples.pt"))
                     self.labels += self._load_json(os.path.join(self.root, f"{type}-labels-{n}obj-{num_samples[i]}samples.json"))
                     self.targets += self._load_data(os.path.join(self.root, f"{type}-targets-{n}obj-{num_samples[i]}samples.pt"))
-                    self.questions += self._load_json(os.path.join(self.root, f"{type}-questions-{n}obj-{num_samples[i]}samples.json"))
+                    if not train:
+                        self.questions += self._load_json(os.path.join(self.root, f"{type}-questions-{n}obj-{num_samples[i]}samples.json"))
         
-        self.data = torch.stack(self.data)
-        if transform:
-            self.data = transform(self.data)
 
     def _check_exists(self, type: str, num_obj, num_samples) -> bool:
         if type == "train":
@@ -164,7 +166,7 @@ class MultiConceptMNIST(VisionDataset):
 
         return image_set, label_set, target_set, question_set
 
-    def image_gen(self, num_samples, num_objs, raw_ds: MNIST) -> [list, list]:
+    def image_gen(self, num_samples, num_objs, raw_ds: MNIST) -> [torch.Tensor, list]:
         image_set = []
         label_set_uni = set() # Check the coverage of generation
         label_set = []
@@ -186,15 +188,15 @@ class MultiConceptMNIST(VisionDataset):
                 digit_image = raw_ds.data[mnist_idx, :, :]
                 for k in self.COLOR_SET[color_idx]:
                     image_tensor[k, pos_y*28:(pos_y+1)*28, pos_x*28:(pos_x+1)*28] = digit_image
+
+                image_tensor = self.transform(image_tensor)
                 digit = raw_ds.targets[mnist_idx].item()
-                
                 object = {
                     "pos_x": pos_x, 
                     "pos_y": pos_y,
                     "color": color_idx,
                     "digit": digit
                 }
-
                 label.append(object)
                 # For coverage check. Since pos is checked to be unique, objects are unique
                 label_uni.add((pos_x, pos_y, color_idx, digit))
