@@ -1,6 +1,6 @@
 import numpy as np
 # from main import DIM, get_test_data, get_vsa, get_cos_similarity
-from model.nn_non_decomposed import MultiConceptNonDecomposed
+from models.nn_non_decomposed import MultiConceptNonDecomposed
 import torch
 import torchvision
 from typing import List, Tuple
