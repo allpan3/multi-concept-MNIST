@@ -1,10 +1,10 @@
 import numpy as np
-# from main import DIM, get_test_data, get_vsa, get_cos_similarity
 from models.nn_non_decomposed import MultiConceptNonDecomposed
 import torch
 import torchvision
 from typing import List, Tuple
 from torch import nn
+import torchvision.transforms as transforms
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -363,11 +363,10 @@ def test(model, dataloader, max_iter=40, output_scale=None):
     losses = []
     sims = []
     for idx, (images, labels, targets, _) in enumerate(dataloader):
-        images = images.to(device)
-        images_nchw = (images.type(torch.float32)/255).permute(0,3,1,2)
-        images_nchw.requires_grad = False
+        images = transforms.ConvertImageDtype(torch.float32)(images.to(device))
+        images.requires_grad = False
         targets_float = targets.to(device).type(torch.float32)
-        output = model(images_nchw)
+        output = model(images)
         if output_scale:
             output /= output_scale
         loss = loss_fn(output, targets_float)
