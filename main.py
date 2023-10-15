@@ -3,7 +3,7 @@ import torch
 from models.vsa import MultiConceptMNISTVSA1, MultiConceptMNISTVSA2
 from vsa import Resonator, VSA
 from datasets.dataset import MultiConceptMNIST
-from torch.utils.data import DataLoader
+from datasets import *
 import torch
 from tqdm import tqdm
 from models.nn_non_decomposed import MultiConceptNonDecomposed
@@ -14,7 +14,7 @@ import sys
 import os
 from datetime import datetime
 from pytz import timezone
-from model_quantization import quantize_model
+from tools.model_quantization import quantize_model
 import torchvision.transforms as transforms
 
 ###########
@@ -24,7 +24,7 @@ VERBOSE = 1
 SEED = 0
 ALGO = "algo1" # "algo1", "algo2"
 VSA_MODE = "HARDWARE" # "SOFTWARE", "HARDWARE"
-QUANTIZE_MODEL = False
+QUANTIZE_MODEL = True 
 DIM = 1024
 MAX_NUM_OBJECTS = 3
 SINGLE_COUNT = False # True, False
@@ -75,18 +75,6 @@ if EARLY_CONVERGE is not None and (ACTIVATION == "SCALEDOWN" or ACTIVATION == "T
 
 test_dir = f"./tests/{VSA_MODE}-{DIM}dim{'-' + str(FOLD_DIM) + 'fd' if VSA_MODE=='HARDWARE' else ''}-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color/{ALGO}"
 
-def collate_train_fn(batch):
-    imgs = torch.stack([x[0] for x in batch], dim=0)
-    labels = [x[1] for x in batch]
-    targets = torch.stack([x[2] for x in batch], dim=0)
-    return imgs, labels, targets
-
-def collate_test_fn(batch):
-    imgs = torch.stack([x[0] for x in batch], dim=0)
-    labels = [x[1] for x in batch]
-    targets = torch.stack([x[2] for x in batch], dim=0)
-    questions = [x[3] for x in batch]
-    return imgs, labels, targets, questions
 
 def train(dataloader, model, loss_fn, optimizer, num_epoch, cur_time, device = "cpu"):
     writer = SummaryWriter(log_dir=f"./runs/{cur_time}-{ALGO}-{VSA_MODE}-{DIM}dim{'-' + str(FOLD_DIM) + 'fd' if VSA_MODE=='HARDWARE' else ''}-{MAX_NUM_OBJECTS}objs-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color", filename_suffix=f".{TRAIN_BATCH_SIZE}batch-{TRAIN_EPOCH}epoch-{NUM_TRAIN_SAMPLES}samples")
@@ -163,16 +151,6 @@ def get_transform():
             # transforms.Resize(224, antialias=True),
             transforms.ConvertImageDtype(torch.float32)  # Converts to [0, 1]
         ])
-
-def get_train_data(vsa, transform = None):
-    train_ds = MultiConceptMNIST(test_dir, vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, single_count=SINGLE_COUNT, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, transform=transform)
-    train_dl = DataLoader(train_ds, batch_size=TRAIN_BATCH_SIZE, shuffle=True, collate_fn=collate_train_fn)
-    return train_dl
-
-def get_test_data(vsa, transform = None):
-    test_ds = MultiConceptMNIST(test_dir, vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, single_count=SINGLE_COUNT, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, transform=transform)
-    test_dl = DataLoader(test_ds, batch_size=TEST_BATCH_SIZE, shuffle=False, collate_fn=collate_test_fn)
-    return test_dl
 
 def factorization_algo1(vsa, rn, inputs, init_estimates, codebooks=None, known=None):
 
@@ -605,7 +583,7 @@ if __name__ == "__main__":
         loss_fn = torch.nn.MSELoss() if ALGO == "algo1" else torch.nn.BCEWithLogitsLoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
         cur_time_pst = datetime.now().astimezone(timezone('US/Pacific')).strftime("%m-%d-%H-%M")
-        train_dl = get_train_data(vsa)
+        train_dl = get_train_data(test_dir, vsa, NUM_TRAIN_SAMPLES, MAX_NUM_OBJECTS, SINGLE_COUNT, TRAIN_BATCH_SIZE, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
         final_loss = train(train_dl, model, loss_fn, optimizer, num_epoch=TRAIN_EPOCH, cur_time=cur_time_pst, device=device)
         model_weight_loc = os.path.join(test_dir, f"model_weights_{MAX_NUM_OBJECTS}objs{'_single_count' if SINGLE_COUNT else ''}_{TRAIN_BATCH_SIZE}batch_{TRAIN_EPOCH}epoch_{NUM_TRAIN_SAMPLES}samples_{final_loss}loss_{cur_time_pst}.pt")
         torch.save(model.state_dict(), model_weight_loc)
@@ -632,7 +610,7 @@ resonator = {RESONATOR_TYPE}, iterations = {NUM_ITERATIONS}, stochasticity = {ST
 activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY_CONVERGE}
 """ + Fore.RESET)
 
-        test_dl = get_test_data(vsa)
+        test_dl = get_test_data(test_dir, vsa, NUM_TEST_SAMPLES, MAX_NUM_OBJECTS, SINGLE_COUNT, TEST_BATCH_SIZE, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
 
         if QUANTIZE_MODEL:
             quantize_model(model, test_dl)
@@ -660,7 +638,7 @@ activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY
 
         model.eval()
 
-        test_dl = get_test_data(vsa)
+        test_dl = get_test_data(test_dir, vsa, NUM_TEST_SAMPLES, MAX_NUM_OBJECTS, SINGLE_COUNT, TEST_BATCH_SIZE, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
 
         if QUANTIZE_MODEL:
             quantize_model(model, test_dl)
@@ -716,7 +694,7 @@ activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY
             exit(1)
 
         model.eval()
-        test_dl = get_test_data(vsa)
+        test_dl = get_test_data(test_dir, vsa, NUM_TEST_SAMPLES, MAX_NUM_OBJECTS, SINGLE_COUNT, TEST_BATCH_SIZE, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
  
         if ALGO == "algo1":
             incorrect_count = reason_algo1(vsa, model, test_dl, device)
