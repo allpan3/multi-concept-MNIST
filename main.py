@@ -24,7 +24,7 @@ VERBOSE = 1
 SEED = 0
 ALGO = "algo1" # "algo1", "algo2"
 VSA_MODE = "HARDWARE" # "SOFTWARE", "HARDWARE"
-QUANTIZE_MODEL = True 
+QUANTIZE_MODEL = False 
 DIM = 1024
 MAX_NUM_OBJECTS = 3
 SINGLE_COUNT = False # True, False
@@ -45,17 +45,17 @@ NUM_TEST_SAMPLES = 300
 # Resonator
 RESONATOR_TYPE = "SEQUENTIAL" # "SEQUENTIAL", "CONCURRENT"
 MAX_TRIALS = MAX_NUM_OBJECTS + 10
-NUM_ITERATIONS = 500
+NUM_ITERATIONS = 200
 ACTIVATION = 'THRESH_AND_SCALE'      # 'IDENTITY', 'THRESHOLD', 'SCALEDOWN', "THRESH_AND_SCALE"
 ACT_VALUE = 16
 STOCHASTICITY = "SIMILARITY"  # apply stochasticity: "NONE", "SIMILARITY", "VECTOR"
 RANDOMNESS = 0.04
 # Similarity thresholds are affected by the maximum number of vectors superposed. These values need to be lowered when more vectors are superposed
-SIM_EXPLAIN_THRESHOLD = 0.2
+SIM_EXPLAIN_THRESHOLD = 0.25
 SIM_DETECT_THRESHOLD = 0.12
 ENERGY_THRESHOLD = 0.25
 EARLY_CONVERGE = None
-EARLY_TERM_THRESHOLD = SIM_DETECT_THRESHOLD
+EARLY_TERM_THRESHOLD = 0.2     # Compared to remaining
 
 # In hardware mode, the activation value needs to be a power of two
 if VSA_MODE == "HARDWARE" and (ACTIVATION == "SCALEDOWN" or ACTIVATION == "THRESH_AND_SCALE"):
@@ -217,7 +217,7 @@ def factorization_algo1(vsa, rn, inputs, init_estimates, codebooks=None, known=N
         t = 3
         if (k >= t-1):
             try:
-                if (all(torch.stack(sim_to_orig_all[0][-t:]) < int(vsa.dim * EARLY_TERM_THRESHOLD))):
+                if (all(torch.stack(sim_to_remain_all[0][-t:]) < int(vsa.dim * EARLY_TERM_THRESHOLD))):
                     break
             except:
                 pass
@@ -233,7 +233,7 @@ def factorization_algo1(vsa, rn, inputs, init_estimates, codebooks=None, known=N
         outcomes[i] = [outcomes[i][j] for j in range(len(outcomes[i])) if sim_to_orig[i][j] >= int(vsa.dim * SIM_DETECT_THRESHOLD)]
         # Since we know there'll be no overlapped objects in this workload, we can filter out duplicates
         # Duplicates can appear if one of the objects is more similar to the input than the other (due to biased noise of NN)
-        # outcomes[i] = list(set(outcomes[i]))
+        outcomes[i] = list(set(outcomes[i]))
     
     counts = [len(outcomes[i]) for i in range(len(outcomes))]
 
@@ -270,7 +270,7 @@ def test_algo1(vsa, model, test_dl, device):
         infer_result = model(images)
 
         if QUANTIZE_MODEL:
-            #todo
+            # infer_result = (infer_result/ 128.0 * MAX_NUM_OBJECTS).round().type(torch.int8)
             pass
         else:
             # round() will round numbers near 0 to 0, which is not ideal when there's one object, since the vector should be bipolar (either 1 or -1)
@@ -610,10 +610,11 @@ resonator = {RESONATOR_TYPE}, iterations = {NUM_ITERATIONS}, stochasticity = {ST
 activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY_CONVERGE}
 """ + Fore.RESET)
 
-        test_dl = get_test_data(test_dir, vsa, NUM_TEST_SAMPLES, MAX_NUM_OBJECTS, SINGLE_COUNT, TEST_BATCH_SIZE, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
+        test_dl = get_test_data(test_dir, vsa, False, NUM_TEST_SAMPLES, MAX_NUM_OBJECTS, SINGLE_COUNT, TEST_BATCH_SIZE, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
+        quan_dl = get_test_data(test_dir, vsa, True, NUM_TEST_SAMPLES if NUM_TEST_SAMPLES < 300 else 300, MAX_NUM_OBJECTS, SINGLE_COUNT, TEST_BATCH_SIZE, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
 
         if QUANTIZE_MODEL:
-            quantize_model(model, test_dl)
+            quantize_model(model, quan_dl)
 
         if ALGO == "algo1":
             incorrect_count, unconverged, total_iters = test_algo1(vsa, model, test_dl, device)
@@ -638,10 +639,10 @@ activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY
 
         model.eval()
 
-        test_dl = get_test_data(test_dir, vsa, NUM_TEST_SAMPLES, MAX_NUM_OBJECTS, SINGLE_COUNT, TEST_BATCH_SIZE, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
-
+        test_dl = get_test_data(test_dir, vsa, False, NUM_TEST_SAMPLES, MAX_NUM_OBJECTS, SINGLE_COUNT, TEST_BATCH_SIZE, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
+        quan_dl = get_test_data(test_dir, vsa, True, NUM_TEST_SAMPLES if NUM_TEST_SAMPLES < 300 else 300, MAX_NUM_OBJECTS, SINGLE_COUNT, TEST_BATCH_SIZE, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
         if QUANTIZE_MODEL:
-            quantize_model(model, test_dl)
+            quantize_model(model, quan_dl)
 
         total_sim = [0] * MAX_NUM_OBJECTS
         max_sim = [-DIM] * MAX_NUM_OBJECTS
@@ -652,7 +653,7 @@ activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY
             infer_result = model(images)
 
             if QUANTIZE_MODEL:
-                #todo
+                # infer_result = (infer_result/ 128.0 * MAX_NUM_OBJECTS).round().type(torch.int8)
                 pass
             else:
                 # round() will round numbers near 0 to 0, which is not ideal when there's one object, since the vector should be bipolar (either 1 or -1)
@@ -694,7 +695,7 @@ activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY
             exit(1)
 
         model.eval()
-        test_dl = get_test_data(test_dir, vsa, NUM_TEST_SAMPLES, MAX_NUM_OBJECTS, SINGLE_COUNT, TEST_BATCH_SIZE, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
+        test_dl = get_test_data(test_dir, vsa, False, NUM_TEST_SAMPLES, MAX_NUM_OBJECTS, SINGLE_COUNT, TEST_BATCH_SIZE, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
  
         if ALGO == "algo1":
             incorrect_count = reason_algo1(vsa, model, test_dl, device)

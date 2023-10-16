@@ -1,5 +1,5 @@
 import torch.nn as nn
-from models.common import get_resnet18_model
+from .resnet import get_resnet18_model
 
 class MultiConceptNonDecomposed(nn.Module):
     def __init__(self, dim, device = "cpu"):
