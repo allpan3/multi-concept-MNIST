@@ -1,12 +1,12 @@
 #%%
-import _init_paths   # pylint: disable=unused-import
+from . import _init_paths   # pylint: disable=unused-import
 from datasets import get_test_data
 import matplotlib.pyplot as plt
 import torch
 from torch import Tensor
 from contextlib import redirect_stdout
 import torchvision.transforms as transforms
-from model_quantization import quantize_model
+from .model_quantization import quantize_model
 from models.nn_non_decomposed import MultiConceptNonDecomposed
 import sys
 import os.path
