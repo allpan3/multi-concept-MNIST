@@ -7,7 +7,6 @@ from datasets import *
 import torch
 from tqdm import tqdm
 from models.nn_non_decomposed import MultiConceptNonDecomposed
-from itertools import chain
 from colorama import Fore
 from torch.utils.tensorboard import SummaryWriter
 import sys
@@ -233,7 +232,7 @@ def factorization_algo1(vsa, rn, inputs, init_estimates, codebooks=None, known=N
         outcomes[i] = [outcomes[i][j] for j in range(len(outcomes[i])) if sim_to_orig[i][j] >= int(vsa.dim * SIM_DETECT_THRESHOLD)]
         # Since we know there'll be no overlapped objects in this workload, we can filter out duplicates
         # Duplicates can appear if one of the objects is more similar to the input than the other (due to biased noise of NN)
-        outcomes[i] = list(set(outcomes[i]))
+        # outcomes[i] = list(set(outcomes[i]))
     
     counts = [len(outcomes[i]) for i in range(len(outcomes))]
 
@@ -640,8 +639,9 @@ activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY
         model.eval()
 
         test_dl = get_test_data(test_dir, vsa, False, NUM_TEST_SAMPLES, MAX_NUM_OBJECTS, SINGLE_COUNT, TEST_BATCH_SIZE, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
-        quan_dl = get_test_data(test_dir, vsa, True, NUM_TEST_SAMPLES if NUM_TEST_SAMPLES < 300 else 300, MAX_NUM_OBJECTS, SINGLE_COUNT, TEST_BATCH_SIZE, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
+
         if QUANTIZE_MODEL:
+            quan_dl = get_test_data(test_dir, vsa, True, NUM_TEST_SAMPLES if NUM_TEST_SAMPLES < 300 else 300, MAX_NUM_OBJECTS, SINGLE_COUNT, TEST_BATCH_SIZE, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
             quantize_model(model, quan_dl)
 
         total_sim = [0] * MAX_NUM_OBJECTS
