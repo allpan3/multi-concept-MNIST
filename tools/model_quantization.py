@@ -387,19 +387,21 @@ def test(model, dataloader, max_iter=40, output_scale=None):
     print(sum(sims)/len(sims))
     print(sum(losses)/len(losses))
 
+def profile_model(model: nn.Module, dataloader):
+    """
+    Profiles the model to get the activation range and input shape of each layer.
+    Also merges the batchnorm layers into the previous convolutional layer.
+    """
+    merge_biases(model)
+    remove_biases(model)
+    stop_profiling = register_activation_profiling_hooks(model)
+    test(model, dataloader, max_iter=99)
+    stop_profiling()
+
 def quantize_model(model: nn.Module, dataloader):
     model.eval()
 
-    # print(model)
-    # exit(1)
-
-    merge_biases(model)
-    remove_biases(model)
-
-    stop_profiling = register_activation_profiling_hooks(model)
-    test(model, dataloader, max_iter=99)
-    print("Stop profiling")
-    stop_profiling()
+    profile_model(model, dataloader)
 
     print("Quantize weights")
     quantize_layer_weights(model)

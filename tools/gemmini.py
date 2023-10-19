@@ -18,7 +18,8 @@ class ConvParams:
         assert not depthwise or in_channels == out_channels
 
         self.batch_size = batch_size
-        self.in_dim = in_dim
+        self.in_row_dim = in_dim
+        self.in_col_dim = in_dim
         self.kernel_size = kernel_size
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -31,11 +32,12 @@ class ConvParams:
         self.pool_stride = pool_stride
         self.pool_padding = pool_padding
 
-        self.out_dim = (in_dim - kernel_size + 2*padding) // stride + 1
+        self.out_row_dim = (in_dim - kernel_size + 2*padding) // stride + 1
+        self.out_col_dim = (in_dim - kernel_size + 2*padding) // stride + 1
 
-        self.out_dim_pooled = (self.out_dim - pool_size + 2*pool_padding) // pool_stride + 1
+        self.out_dim_pooled = (self.out_row_dim - pool_size + 2*pool_padding) // pool_stride + 1
 
-        self.n_patches = self.out_dim * self.out_dim * batch_size
+        self.n_patches = self.out_row_dim * self.out_col_dim * batch_size
 
         if depthwise:
             self.patch_size = kernel_size * kernel_size
@@ -63,9 +65,9 @@ def get_params(layer: nn.Module, batch_size=None, in_dim=None, pool_stride=None,
                              out_channels=layer.out_channels, depthwise=layer.groups > 1,
                              stride=layer.stride[0], padding=layer.padding[0], bias=layer.bias is not None,
                              pool_size=pool_size, pool_stride=pool_stride, pool_padding=pool_padding,
-                            output_scale = layer.output_scale)
+                             output_scale = layer.output_scale if hasattr(layer, 'output_scale') else 1)
     elif isinstance(layer, nn.Linear):
-        return FcParams(batch_size=batch_size, in_features=layer.in_features, out_features=layer.out_features, bias=layer.bias is not None, output_scale=layer.output_scale)
+        return FcParams(batch_size=batch_size, in_features=layer.in_features, out_features=layer.out_features, bias=layer.bias is not None, output_scale=layer.output_scale if hasattr(layer, 'output_scale') else 1)
 
 def filter2col(x: torch.Tensor, params: ConvParams) -> torch.Tensor:
     n_filters = 1 if params.depthwise else params.out_channels
