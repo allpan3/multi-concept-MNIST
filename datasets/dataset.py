@@ -66,8 +66,8 @@ class MultiConceptMNIST(VisionDataset):
         assert(max_num_objects <= num_pos_x * num_pos_y)
         self.max_num_objects = max_num_objects
 
-        if transform is None:
-            self.transform = lambda x: x
+        # if transform is None:
+        #     self.transform = lambda x: x
  
         self.data = []
         self.labels = []
@@ -190,7 +190,7 @@ class MultiConceptMNIST(VisionDataset):
                 for k in self.COLOR_SET[color_idx]:
                     image_tensor[k, pos_y*28:(pos_y+1)*28, pos_x*28:(pos_x+1)*28] = digit_image
 
-                image_tensor = self.transform(image_tensor)
+                # image_tensor = self.transform(image_tensor) # TODO remove this for now. Still prefer to keep the saved version constant and only transform when loading. It's just too costly for memory
                 digit = raw_ds.targets[mnist_idx].item()
                 object = (pos_x, pos_y, color_idx, digit)
                 label.append(object)

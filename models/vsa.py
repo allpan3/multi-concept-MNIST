@@ -3,6 +3,14 @@ from vsa import VSA
 import itertools
 import torch
 
+            
+def get_vsa(dir, mode, algo, dim, max_num_objects, num_colors, num_pos_x, num_pos_y, fold_dim, ehd_bits, sim_bits, seed, device):
+    if algo == "algo1":
+        vsa = MultiConceptMNISTVSA1(dir, mode=mode, dim=dim, max_num_objects=max_num_objects, num_colors=num_colors, num_pos_x=num_pos_x, num_pos_y=num_pos_y, fold_dim=fold_dim, ehd_bits=ehd_bits, sim_bits=sim_bits, seed=seed, device=device)
+    elif algo == "algo2":
+        vsa = MultiConceptMNISTVSA2(dir, mode=mode, dim=dim, max_num_objects=max_num_objects, num_colors=num_colors, num_pos_x=num_pos_x, num_pos_y=num_pos_y, fold_dim=fold_dim, ehd_bits=ehd_bits, sim_bits=sim_bits, seed=seed, device=device)
+    return vsa
+
 class MultiConceptMNISTVSA1(VSA):
 
     def __init__(
