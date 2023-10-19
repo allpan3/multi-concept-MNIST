@@ -28,13 +28,7 @@ class MultiConceptMNISTVSA1(VSA):
 
 
     def lookup(self, label: list):
-        '''
-        `label` is a list of dict in [{'pos_x': int, 'pos_y': int, 'color': int, 'digit': int}, ...] format
-        '''
-        key = []
-        for i in range(len(label)):
-            key.append((label[i]["pos_x"], label[i]["pos_y"], label[i]["color"], label[i]["digit"]))
-        return self.get_vector(key, quantize=False)
+        return self.get_vector(label, quantize=False)
 
 
 class MultiConceptMNISTVSA2(VSA):
@@ -70,22 +64,18 @@ class MultiConceptMNISTVSA2(VSA):
 
     def lookup(self, label: list, bundled: bool = True):
         '''
-        `label` is a list of dict in [{'pos_x': int, 'pos_y': int, 'color': int, 'digit': int}, ...] format
+        `label` doesn't include ID
         We reorder the label list based on the (x, y) locations of the objects in the scene, then bind the corresponding
         ID to the compositional vector
         '''
-        key = []
-        for i in range(len(label)):
-            # Label without ID
-            key.append((label[i]["pos_x"], label[i]["pos_y"], label[i]["color"], label[i]["digit"]))
             
         # Get all objects (excluding ID)
-        objects = [self.get_vector(key[j], quantize=True) for j in range(len(key))]
+        objects = [self.get_vector(label[j], quantize=True) for j in range(len(label))]
 
         # Reorder the positions of the objects in each label in the ascending order of (x, y), the first two elements in the label
-        _, objects = list(zip(*sorted(zip(key, objects), key=lambda k: self.rule.index(k[0][0:2]))))
+        _, objects = list(zip(*sorted(zip(label, objects), key=lambda k: self.rule.index(k[0][0:2]))))
         # Remember the original indice of the codebooks for reordering later
-        indices = sorted(range(len(key)), key=lambda k: self.rule.index(key[k][0:2]))
+        indices = sorted(range(len(label)), key=lambda k: self.rule.index(label[k][0:2]))
         # Bind the vector with ID determined by the position in the list
         objects = [self.bind(objects[j], self.id_codebook[j]) for j in range(len(objects))]
         # Return to the original order (for similarity check)
@@ -94,6 +84,4 @@ class MultiConceptMNISTVSA2(VSA):
             objects = self.multiset(torch.stack(objects))
 
         return objects
-
-
 

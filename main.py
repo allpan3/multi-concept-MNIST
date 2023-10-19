@@ -19,7 +19,7 @@ import torchvision.transforms as transforms
 ###########
 # Configs #
 ###########
-VERBOSE = 1
+VERBOSE = 2
 SEED = 0
 ALGO = "algo1" # "algo1", "algo2"
 VSA_MODE = "HARDWARE" # "SOFTWARE", "HARDWARE"
@@ -37,7 +37,7 @@ SIM_BITS = 13
 # Train
 TRAIN_EPOCH = 50
 TRAIN_BATCH_SIZE = 128
-NUM_TRAIN_SAMPLES = 300000
+NUM_TRAIN_SAMPLES = 10000
 # Test
 TEST_BATCH_SIZE = 1
 NUM_TEST_SAMPLES = 300
@@ -78,7 +78,7 @@ test_dir = f"./tests/{VSA_MODE}-{DIM}dim{'-' + str(FOLD_DIM) + 'fd' if VSA_MODE=
 def train(dataloader, model, loss_fn, optimizer, num_epoch, cur_time, device = "cpu"):
     writer = SummaryWriter(log_dir=f"./runs/{cur_time}-{ALGO}-{VSA_MODE}-{DIM}dim{'-' + str(FOLD_DIM) + 'fd' if VSA_MODE=='HARDWARE' else ''}-{MAX_NUM_OBJECTS}objs-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color", filename_suffix=f".{TRAIN_BATCH_SIZE}batch-{TRAIN_EPOCH}epoch-{NUM_TRAIN_SAMPLES}samples")
     # images in tensor([B, C, H, W])
-    # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
+    # labels in [(pos_x, pos_y, color, digit), ...]
     # targets in VSATensor([B, D])
     for epoch in range(num_epoch):
         if epoch != 0 and epoch % 5 == 0:
@@ -261,9 +261,6 @@ def test_algo1(vsa, model, test_dl, device):
     unconverged = [[0,0] for _ in range(MAX_NUM_OBJECTS)]    # [correct, incorrect]
     total_iters = [0] * MAX_NUM_OBJECTS
     n = 0
-    # images in tensor([B, C, H, W])
-    # labels in [{'pos_x': tensor, 'pos_y': tensor, 'color': tensor, 'digit': tensor}, ...]
-    # targets in VSATensor([B, D])
     for images, labels, targets, _ in tqdm(test_dl, desc="Test", leave=True if VERBOSE >= 1 else False):
         images = get_transform()(images.to(device))
         infer_result = model(images)
@@ -290,18 +287,6 @@ def test_algo1(vsa, model, test_dl, device):
             count = counts[i]
             iter = iters[i]
             sim_per_obj = []
-            result = []
-
-            # Convert to labels
-            for o in outcome:
-                result.append(
-                    {
-                        'pos_x': o[0],
-                        'pos_y': o[1],
-                        'color': o[2],
-                        'digit': o[3]
-                    }
-                )
 
             total_iters[len(label)-1] += sum(iter)
 
@@ -314,10 +299,10 @@ def test_algo1(vsa, model, test_dl, device):
             # Sample: multiple objects
             for j in range(len(label)):
                 # For per-object similarity, compare the quantized vectors, which are what the resonator network sees
-                sim_per_obj = round(get_dot_similarity(infer_result[i], vsa.lookup([label[j]]), False).item(), 3)
+                sim_per_obj = round(get_dot_similarity(infer_result[i], vsa.lookup([label[j]]), False).item(), 3) # Adding the [] makes it unquantized
                 # Incorrect if one object is not detected 
                 # For n objects, only check the first n results
-                if (label[j] not in result):
+                if (label[j] not in outcome):
                     incorrect = True
                     message += Fore.RED + "Object {} is not detected. Similarity = {}".format(label[j], sim_per_obj) + Fore.RESET + "\n"
                 else:
@@ -333,7 +318,6 @@ def test_algo1(vsa, model, test_dl, device):
                     print(f"Unconverged: {convergence}")
                     print(f"Iterations: {iter}")
                     print(message[:-1])
-                    # print("Result = {}".format(result))
                     print(debug_message[:-1])
                     print("Outcome: {}".format(outcome))
             else:
@@ -341,7 +325,6 @@ def test_algo1(vsa, model, test_dl, device):
                 if (VERBOSE >= 2):
                     print(Fore.BLUE + f"Test {n} Passed" + Fore.RESET)
                     print("Inference result similarity = {:.3f}".format(get_cos_similarity(infer_result[i], targets[i]).item()))
-                    # print("Per-object similarity = {}".format(sim_per_obj))
                     print(f"Unconverged: {convergence}")
                     print(f"Iterations: {iter}")
                     print(message[:-1])

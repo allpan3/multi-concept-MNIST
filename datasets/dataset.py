@@ -85,7 +85,7 @@ class MultiConceptMNIST(VisionDataset):
             else:
                 print(f"{type} {max_num_objects} obj {num_samples} dataset exists, loading...")
                 self.data = self._load_data(os.path.join(self.root, f"{type}-images-{max_num_objects}obj-{num_samples}samples.pt"))
-                self.labels = self._load_json(os.path.join(self.root, f"{type}-labels-{max_num_objects}obj-{num_samples}samples.json"))
+                self.labels = self._load_data(os.path.join(self.root, f"{type}-labels-{max_num_objects}obj-{num_samples}samples.pt"))
                 self.targets = self._load_data(os.path.join(self.root, f"{type}-targets-{max_num_objects}obj-{num_samples}samples.pt"))
                 if not train:
                     self.questions = self._load_json(os.path.join(self.root, f"{type}-questions-{max_num_objects}obj-{num_samples}samples.json"))
@@ -103,22 +103,24 @@ class MultiConceptMNIST(VisionDataset):
                 else:
                     print(f"{type} {n} obj {num_samples[i]} dataset exists, loading...")
                     self.data += self._load_data(os.path.join(self.root, f"{type}-images-{n}obj-{num_samples[i]}samples.pt"))
-                    self.labels += self._load_json(os.path.join(self.root, f"{type}-labels-{n}obj-{num_samples[i]}samples.json"))
+                    self.labels += self._load_data(os.path.join(self.root, f"{type}-labels-{n}obj-{num_samples[i]}samples.pt"))
                     self.targets += self._load_data(os.path.join(self.root, f"{type}-targets-{n}obj-{num_samples[i]}samples.pt"))
                     if not train:
                         self.questions += self._load_json(os.path.join(self.root, f"{type}-questions-{n}obj-{num_samples[i]}samples.json"))
+        
+        self.data = torch.stack(self.data)
         
 
     def _check_exists(self, type: str, num_obj, num_samples) -> bool:
         if type == "train":
             return all(
                 os.path.exists(os.path.join(self.root, file))
-                for file in [f"{type}-{t}-{num_obj}obj-{num_samples}samples.pt" for t in ["targets", "images"]]
+                for file in [f"{type}-{t}-{num_obj}obj-{num_samples}samples.pt" for t in ["targets", "images", "labels"]]
             )
         else:
             return all(
                 [os.path.exists(os.path.join(self.root, file))
-                 for file in [f"{type}-{t}-{num_obj}obj-{num_samples}samples.pt" for t in ["targets", "images"]]]
+                 for file in [f"{type}-{t}-{num_obj}obj-{num_samples}samples.pt" for t in ["targets", "images", "labels"]]]
                  + [os.path.exists(os.path.join(self.root, file))
                     for file in [f"{type}-{t}-{num_obj}obj-{num_samples}samples.json" for t in ["questions"]]]
             )
@@ -148,8 +150,7 @@ class MultiConceptMNIST(VisionDataset):
         print("Saving images...", end="", flush=True)
         torch.save(image_set, os.path.join(self.root, f"{type}-images-{n_obj}obj-{num_samples}samples.pt"))
         print("Done. Saving labels...", end="", flush=True)
-        with open(os.path.join(self.root, f"{type}-labels-{n_obj}obj-{num_samples}samples.json"), "w") as f:
-            json.dump(label_set, f)
+        torch.save(label_set, os.path.join(self.root, f"{type}-labels-{n_obj}obj-{num_samples}samples.pt"))
         print("Done.")
         target_set = self.target_gen(label_set)
         print("Saving targets...", end="", flush=True)
@@ -191,15 +192,10 @@ class MultiConceptMNIST(VisionDataset):
 
                 image_tensor = self.transform(image_tensor)
                 digit = raw_ds.targets[mnist_idx].item()
-                object = {
-                    "pos_x": pos_x, 
-                    "pos_y": pos_y,
-                    "color": color_idx,
-                    "digit": digit
-                }
+                object = (pos_x, pos_y, color_idx, digit)
                 label.append(object)
                 # For coverage check. Since pos is checked to be unique, objects are unique
-                label_uni.add((pos_x, pos_y, color_idx, digit))
+                label_uni.add(object)
 
             # For coverage check, convert to tuple to make it hashable and unordered
             label_set_uni.add(tuple(label_uni)) 
@@ -216,7 +212,7 @@ class MultiConceptMNIST(VisionDataset):
         
         target_set = []
         for label in tqdm(label_set, desc=f"Generating targets for {len(label_set[0])}-object images", leave=False):
-            target_set.append(self.vsa.lookup(label))
+            target_set.append(self.vsa.lookup(label)) # Use this instead of get_vector cuz whether to quantize is determined by the algorithm
         return target_set
 
     QUESTION_SET = [
@@ -230,11 +226,7 @@ class MultiConceptMNIST(VisionDataset):
 
         attr_nums = [self.num_pos_x, self.num_pos_y, self.num_colors, 10]
         question_set = []
-        for _label in tqdm(label_set, desc=f"Generating questions for {len(label_set[0])}-object images", leave=False):
-            # TODO we may just save label in tuple format since the dict doesn't really provide additional information. Or at least pass labels to target and question gen in tuple format directly
-            label = []
-            for i in range(len(_label)):
-                label.append((_label[i]["pos_x"], _label[i]["pos_y"], _label[i]["color"], _label[i]["digit"]))
+        for label in tqdm(label_set, desc=f"Generating questions for {len(label_set[0])}-object images", leave=False):
             questions = []
             # Generate a question and its answer for each question type
             for q in self.QUESTION_SET:
