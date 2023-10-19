@@ -3,12 +3,11 @@ from vsa import VSA
 import itertools
 import torch
 
-            
-def get_vsa(dir, mode, algo, dim, max_num_objects, num_colors, num_pos_x, num_pos_y, fold_dim, ehd_bits, sim_bits, seed, device):
+def get_vsa(dir, mode, algo, codebooks, dim, max_num_objects, num_colors=7, num_pos_x=3, num_pos_y=3, fold_dim=256, ehd_bits=9, sim_bits=13, seed=None, device=None):
     if algo == "algo1":
-        vsa = MultiConceptMNISTVSA1(dir, mode=mode, dim=dim, max_num_objects=max_num_objects, num_colors=num_colors, num_pos_x=num_pos_x, num_pos_y=num_pos_y, fold_dim=fold_dim, ehd_bits=ehd_bits, sim_bits=sim_bits, seed=seed, device=device)
+        vsa = MultiConceptMNISTVSA1(dir, mode=mode, codebooks=codebooks, dim=dim, max_num_objects=max_num_objects, num_colors=num_colors, num_pos_x=num_pos_x, num_pos_y=num_pos_y, fold_dim=fold_dim, ehd_bits=ehd_bits, sim_bits=sim_bits, seed=seed, device=device)
     elif algo == "algo2":
-        vsa = MultiConceptMNISTVSA2(dir, mode=mode, dim=dim, max_num_objects=max_num_objects, num_colors=num_colors, num_pos_x=num_pos_x, num_pos_y=num_pos_y, fold_dim=fold_dim, ehd_bits=ehd_bits, sim_bits=sim_bits, seed=seed, device=device)
+        vsa = MultiConceptMNISTVSA2(dir, mode=mode, codebooks=codebooks, dim=dim, max_num_objects=max_num_objects, num_colors=num_colors, num_pos_x=num_pos_x, num_pos_y=num_pos_y, fold_dim=fold_dim, ehd_bits=ehd_bits, sim_bits=sim_bits, seed=seed, device=device)
     return vsa
 
 class MultiConceptMNISTVSA1(VSA):
@@ -16,7 +15,8 @@ class MultiConceptMNISTVSA1(VSA):
     def __init__(
             self,
             root: str,
-            mode: Literal['SOFTWARE', 'HARDWARE'] = 'SOFTWARE',
+            mode: Literal['SOFTWARE', 'HARDWARE'],
+            codebooks = None,
             dim: int = 2048,
             max_num_objects = 3,
             num_pos_x = 3,
@@ -28,12 +28,11 @@ class MultiConceptMNISTVSA1(VSA):
             seed: None or int = None,  # random seed
             device = "cpu"):
 
-        super().__init__(root, mode, dim, num_factors = 4, num_codevectors = (num_pos_x, num_pos_y, num_colors, 10), fold_dim = fold_dim, ehd_bits = ehd_bits, sim_bits = sim_bits, seed = seed, device = device)
+        super().__init__(root, mode, dim, codebooks=codebooks, num_factors = 4, num_codevectors = (num_pos_x, num_pos_y, num_colors, 10), fold_dim = fold_dim, ehd_bits = ehd_bits, sim_bits = sim_bits, seed = seed, device = device)
 
         self.num_pos_x = num_pos_x
         self.num_pos_y = num_pos_y
         self.num_colors = num_colors
-
 
     def lookup(self, label: list):
         return self.get_vector(label, quantize=False)
@@ -44,7 +43,8 @@ class MultiConceptMNISTVSA2(VSA):
     def __init__(
         self,
         root: str,
-        mode: Literal['SOFTWARE', 'HARDWARE'] = 'SOFTWARE',
+        mode: Literal['SOFTWARE', 'HARDWARE'],
+        codebooks = None,
         dim: int = 2048,
         max_num_objects = 3,
         num_pos_x = 3,
@@ -61,7 +61,7 @@ class MultiConceptMNISTVSA2(VSA):
         self.num_pos_x = num_pos_x
         self.num_pos_y = num_pos_y
         self.num_colors = num_colors
-        super().__init__(root, mode, dim, num_factors = 5, num_codevectors = (num_pos_x, num_pos_y, num_colors, 10, self.num_id), fold_dim = fold_dim, ehd_bits = ehd_bits, sim_bits = sim_bits, seed = seed, device = device)
+        super().__init__(root, mode, dim, codebooks=codebooks, num_factors = 5, num_codevectors = (num_pos_x, num_pos_y, num_colors, 10, self.num_id), fold_dim = fold_dim, ehd_bits = ehd_bits, sim_bits = sim_bits, seed = seed, device = device)
 
         self.id_codebook = self.codebooks[-1]
         self.x_codebook = self.codebooks[0]

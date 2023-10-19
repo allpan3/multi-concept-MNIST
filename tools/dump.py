@@ -22,19 +22,13 @@ from math import ceil, log2
 from tqdm import tqdm
 from typing import Tuple
 from models.resnet import Bottleneck
+import argparse
 
-# def imshow(img):
-#     plt.imshow(img.permute(1,2,0))
-#     plt.show()
 
 def imshow(img):
     # img = img / 2 + 0.5     # unnormalize (from [-1,1] to [0,1])
     plt.imshow(img.permute(1,2,0))
     plt.show()
-
-# def imsave(img, path):
-#     # img = img / 2 + 0.5     # unnormalize (from [-1,1] to [0,1])
-#     plt.imsave(path, img.permute(1,2,0))
 
 def generate_image_png(images: Tensor, dir):
     """
@@ -791,20 +785,24 @@ void model(elem_t *images, enum tiled_matmul_type_t tiled_matmul_type, bool chec
 
 if __name__ == "__main__":
     test_dir = f"./tests/{VSA_MODE}-{DIM}dim{'-' + str(FOLD_DIM) + 'fd' if VSA_MODE=='HARDWARE' else ''}-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color/{ALGO}"
+    parser = argparse.ArgumentParser(description="Dump model and test data to C")
+    parser.add_argument("checkpoint", type=str, help="model checkpoint")
+    parser.add_argument("--codebooks", type=str, help="codebook file path", default=None)
+
+    args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = MultiConceptNonDecomposed(dim=DIM, device=device)
     model.eval()
 
-    if sys.argv[-1].endswith(".pt"):
-        if os.path.exists(sys.argv[-1]):
-            checkpoint = torch.load(sys.argv[-1], map_location=device)
-            model.load_state_dict(checkpoint)
-        else:
-            print("Invalid model checkpoint path.")
-            exit(1)
+    if os.path.exists(args.checkpoint):
+        checkpoint = torch.load(args.checkpoint, map_location=device)
+        model.load_state_dict(checkpoint)
+    else:
+        print("Invalid model checkpoint path.")
+        exit(1)
 
-    vsa = get_vsa(test_dir, VSA_MODE, ALGO, DIM, MAX_NUM_OBJECTS, NUM_COLOR, NUM_POS_X, NUM_POS_Y, FOLD_DIM, EHD_BITS, SIM_BITS, SEED, device)
+    vsa = get_vsa(test_dir, VSA_MODE, ALGO, args.codebooks, DIM, MAX_NUM_OBJECTS, NUM_COLOR, NUM_POS_X, NUM_POS_Y, FOLD_DIM, EHD_BITS, SIM_BITS, SEED, device)
     dl = get_test_data(test_dir, vsa, False, NUM_TEST_SAMPLES, MAX_NUM_OBJECTS, SINGLE_COUNT, 1, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
     quan_dl = get_test_data(test_dir, vsa, True, NUM_TEST_SAMPLES, MAX_NUM_OBJECTS, SINGLE_COUNT, 1, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
 

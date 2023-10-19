@@ -16,6 +16,7 @@ from pytz import timezone
 from tools.model_quantization import quantize_model
 import torchvision.transforms as transforms
 from config import *
+import argparse
 
 test_dir = f"./tests/{VSA_MODE}-{DIM}dim{'-' + str(FOLD_DIM) + 'fd' if VSA_MODE=='HARDWARE' else ''}-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color/{ALGO}"
 
@@ -477,25 +478,27 @@ def reason_algo1(vsa, model, test_dl, device):
     return incorrect_count
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Multi-Concept MNIST")
+    parser.add_argument("action", type=str, help="train, test, datagen, eval, reason")
+    parser.add_argument("checkpoint", type=str, help="model checkpoint", nargs='?', default=None)
+    parser.add_argument("--codebooks", type=str, help="codebook file path", default=None)
 
-    action = sys.argv[1] # train, test, datagen, eval, reason
+    args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    # if action == "test":
-    #     device = "cpu"
     print(f"Workload Config: algorithm = {ALGO}, vsa mode = {VSA_MODE}, dim = {DIM}, num pos x = {NUM_POS_X}, num pos y = {NUM_POS_Y}, num color = {NUM_COLOR}, num digits = 10, max num objects = {MAX_NUM_OBJECTS}")
 
-    vsa = get_vsa(test_dir, VSA_MODE, ALGO, DIM, MAX_NUM_OBJECTS, NUM_COLOR, NUM_POS_X, NUM_POS_Y, FOLD_DIM, EHD_BITS, SIM_BITS, SEED, device)
+    vsa = get_vsa(test_dir, VSA_MODE, ALGO, args.codebooks, DIM, MAX_NUM_OBJECTS, NUM_COLOR, NUM_POS_X, NUM_POS_Y, FOLD_DIM, EHD_BITS, SIM_BITS, SEED, device)
     model = MultiConceptNonDecomposed(dim=DIM, device=device)
 
-    if action == "train":
+    if args.action == "train":
         print(f"Training on {device}: samples = {NUM_TRAIN_SAMPLES}, epochs = {TRAIN_EPOCH}, batch size = {TRAIN_BATCH_SIZE}")
 
-        if sys.argv[-1].endswith(".pt"):
-            if os.path.exists(sys.argv[-1]):
-                checkpoint = torch.load(sys.argv[-1], map_location=device)
+        if args.checkpoint is not None:
+            if os.path.exists(args.checkpoint):
+                checkpoint = torch.load(args.checkpoint, map_location=device)
                 model.load_state_dict(checkpoint)
-                print(f"On top of checkpoint {sys.argv[-1]}")
+                print(f"On top of checkpoint {args.checkpoint}")
             else:
                 print("Invalid model checkpoint path.")
                 exit(1)
@@ -510,12 +513,11 @@ if __name__ == "__main__":
         print(f"Model weights saved to {model_weight_loc}")
 
     # Test mode
-    elif action == "test":
+    elif args.action == "test":
         print(f"Running test on {device}, batch size = {TEST_BATCH_SIZE}")
 
-        # assume we provided checkpoint path at the end of the command line
-        if sys.argv[-1].endswith(".pt") and os.path.exists(sys.argv[-1]):
-            checkpoint = torch.load(sys.argv[-1], map_location=device)
+        if args.checkpoint and os.path.exists(args.checkpoint):
+            checkpoint = torch.load(args.checkpoint, map_location=device)
             model.load_state_dict(checkpoint)
         else:
             print("Please provide a valid model checkpoint path.")
@@ -547,11 +549,11 @@ activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY
             for i in range(MAX_NUM_OBJECTS):
                 print(f"{i+1} objects: Accuracy = {NUM_TEST_SAMPLES//MAX_NUM_OBJECTS - incorrect_count[i]}/{NUM_TEST_SAMPLES//MAX_NUM_OBJECTS}   Unconverged = {unconverged[i]}    Average iterations: {total_iters[i] / (NUM_TEST_SAMPLES//MAX_NUM_OBJECTS)}")
 
-    elif action == "eval":
+    elif args.action == "eval":
         assert TEST_BATCH_SIZE == 1, "Evaluation mode only supports batch size = 1 so far"
-        # assume we provided checkpoint path at the end of the command line
-        if sys.argv[-1].endswith(".pt") and os.path.exists(sys.argv[-1]):
-            checkpoint = torch.load(sys.argv[-1], map_location=device)
+
+        if args.checkpoint and os.path.exists(args.checkpoint):
+            checkpoint = torch.load(args.checkpoint, map_location=device)
             model.load_state_dict(checkpoint)
         else:
             print("Please provide a valid model checkpoint path.")
@@ -605,11 +607,11 @@ activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY
             
             print(f"Avrage similarity = {round(sum(total_sim) / NUM_TEST_SAMPLES, 3)}")
  
-    elif action == "reason":
+    elif args.action == "reason":
         assert TEST_BATCH_SIZE == 1, "Reason mode only supports batch size = 1 so far"
-        # assume we provided checkpoint path at the end of the command line
-        if sys.argv[-1].endswith(".pt") and os.path.exists(sys.argv[-1]):
-            checkpoint = torch.load(sys.argv[-1], map_location=device)
+
+        if args.checkpoint and os.path.exists(args.checkpoint):
+            checkpoint = torch.load(args.checkpoint, map_location=device)
             model.load_state_dict(checkpoint)
         else:
             print("Please provide a valid model checkpoint path.")
@@ -628,6 +630,6 @@ activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY
                 print(f"{i+1} objects: Accuracy = {NUM_TEST_SAMPLES//MAX_NUM_OBJECTS - incorrect_count[i]}/{NUM_TEST_SAMPLES//MAX_NUM_OBJECTS}")
 
     # Data Gen mode      
-    elif action == "datagen":
+    elif args.action == "datagen":
         MultiConceptMNIST(test_dir, vsa, train=True, num_samples=NUM_TRAIN_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, single_count=SINGLE_COUNT, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True)
         MultiConceptMNIST(test_dir, vsa, train=False, num_samples=NUM_TEST_SAMPLES, max_num_objects=MAX_NUM_OBJECTS, single_count=SINGLE_COUNT, num_pos_x=NUM_POS_X, num_pos_y=NUM_POS_Y, num_colors=NUM_COLOR, force_gen=True)
