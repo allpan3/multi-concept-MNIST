@@ -332,7 +332,7 @@ def generate_model_header(model, gemmini_dim, batch_size = 1, decimals = 5):
     print('''#include <include/gemmini_params.h>
 #include <stdbool.h>
 
-    void model(enum tiled_matmul_type_t tiled_matmul_type, bool check);
+void model(elem_t *images, enum tiled_matmul_type_t tiled_matmul_type, bool check);
 ''')
 
     idx = 1
@@ -410,12 +410,15 @@ def generate_model_src(model: nn.Module):
 #include "include/gemmini.h"
 #include "include/gemmini_nn.h"
 
-#include "model_params.h"
-#include "images.h"
+#include "model.h"
 
+void model(elem_t *images, enum tiled_matmul_type_t tiled_matmul_type, bool check){
+    uint64_t start, end;
+    uint64_t im2col_cycles = 0, matmul_cycles = 0, pool_cycles = 0, conv_dw_cycles = 0, res_add_cycles = 0, other_cycles = 0;
+
+    gemmini_flush(0);
 ''')
-   
-    
+
     def name_of_output(params):
         if isinstance(params, ConvParams):
             if params.depthwise:
@@ -685,13 +688,6 @@ def generate_model_src(model: nn.Module):
     res_downsample = None # Used for ResNet
 
     final_fc = [mod for mod in model.modules() if isinstance(mod, nn.Linear)][-1]
-
-    print(r'''void model(enum tiled_matmul_type_t tiled_matmul_type, bool check) {
-    uint64_t start, end;
-    uint64_t im2col_cycles = 0, matmul_cycles = 0, pool_cycles = 0, conv_dw_cycles = 0, res_add_cycles = 0, other_cycles = 0;
-
-    gemmini_flush(0);
-''')
 
     for layer in tqdm(model.modules(), desc="Generating model source file", leave=False):
 
