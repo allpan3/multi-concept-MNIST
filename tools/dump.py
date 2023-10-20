@@ -60,13 +60,17 @@ def generate_image_header(images: Tensor, scaling_factor = None):
     
     print(r'''#ifndef MC_MNIST_IMAGES_H
 #define MC_MNIST_IMAGES_H
+
+#include "gemmini/gemmini_params.h"
 ''')
 
     # Gemmini expects (N, H, W, C)
     _images = images.permute(0, 2, 3, 1)
 
-    shape = images.shape
-    print(f"static const elem_t images[{shape[0]}][{shape[1]}][{shape[2]}][{shape[3]}] row_align(1) = ", end="")
+    shape = _images.shape
+
+    print("#define NUM_IMAGES {}".format(shape[0]))
+    print(f"static const elem_t images[NUM_IMAGES][{shape[1]}][{shape[2]}][{shape[3]}] row_align(1) = ", end="")
     if scaling_factor is not None:
         _images = torch.clamp(_images * scaling_factor, min=-128, max=127).round().int()
     print_tensor(_images)
@@ -114,10 +118,10 @@ def generate_labels(labels: list, filename):
     with open(filename, "w") as f:
         json.dump(label_set, f)
 
-def generate_model_header(model, gemmini_dim, batch_size = 1, decimals = 5):
+def generate_model_params(model, gemmini_dim, batch_size = 1, decimals = 5):
     """
     Dump out model as a header file
-    This function takes a unquantized model
+    This function takes a unquantized model (for now)
     """
     def print_matrix2d(m: torch.Tensor, height: int, width: int, height_padded: int, width_padded: int):
         print("{", end="")
@@ -200,7 +204,7 @@ def generate_model_header(model, gemmini_dim, batch_size = 1, decimals = 5):
 
         # Print params
         # print(f"static const struct ConvParams conv_{idx}_params = {{.batch_size={params.batch_size}, .in_row_dim={params.in_row_dim}, .in_col_dim={params.in_col_dim}, .kernel_size={params.kernel_size}, .in_channels={params.in_channels}, .out_channels={params.out_channels}, .stride={params.stride}, .padding={params.padding}, .bias={int(params.bias)}, .depthwise={int(params.depthwise)}, .out_row_dim={params.out_row_dim}, .out_col_dim={params.out_col_dim}, .n_patches={params.n_patches}, .patch_size={params.patch_size}, .pool_size={pool_size}, .pool_stride={pool_stride}, .pool_padding={pool_padding}, .out_dim_pooled={params.out_dim_pooled}, .output_scale={-int(log2(params.output_scale))}, .I={padded(in_height)}, .J={padded(out_width)}, .K={padded(in_width)}, .res_scale={-int(log2(res_scale))}}};")
-        print(f"static const struct ConvParams conv_{idx}_params = {{.batch_size={params.batch_size}, .in_row_dim={params.in_row_dim}, .in_col_dim={params.in_col_dim}, .kernel_size={params.kernel_size}, .in_channels={params.in_channels}, .out_channels={params.out_channels}, .stride={params.stride}, .padding={params.padding}, .bias={int(params.bias)}, .depthwise={int(params.depthwise)}, .out_row_dim={params.out_row_dim}, .out_col_dim={params.out_col_dim}, .n_patches={params.n_patches}, .patch_size={params.patch_size}, .pool_size={pool_size}, .pool_stride={pool_stride}, .pool_padding={pool_padding}, .out_dim_pooled={params.out_dim_pooled}, .output_scale={params.output_scale}, .I={padded(in_height)}, .J={padded(out_width)}, .K={padded(in_width)}, .res_scale={res_scale}}};")
+        print(f"static const struct ConvParams conv_{idx}_params = {{.batch_size={params.batch_size}, .in_row_dim={params.in_row_dim}, .in_col_dim={params.in_col_dim}, .out_row_dim={params.out_row_dim}, .out_col_dim={params.out_col_dim}, .kernel_size={params.kernel_size}, .in_channels={params.in_channels}, .out_channels={params.out_channels}, .stride={params.stride}, .padding={params.padding}, .bias={int(params.bias)}, .depthwise={int(params.depthwise)}, .n_patches={params.n_patches}, .patch_size={params.patch_size}, .pool_size={pool_size}, .pool_stride={pool_stride}, .pool_padding={pool_padding}, .out_dim_pooled={params.out_dim_pooled}, .output_scale={params.output_scale}, .I={padded(in_height)}, .J={padded(out_width)}, .K={padded(in_width)}, .res_scale={res_scale}}};")
         layer.quant_params = params
         layer.quant_params.I = padded(in_height)
         layer.quant_params.J = padded(out_width)
@@ -264,31 +268,31 @@ def generate_model_header(model, gemmini_dim, batch_size = 1, decimals = 5):
         params = get_params(layer, batch_size=batch_size)
 
         # Print weights
-        print("static const elem_t fc_{}_w[{}][{}] row_align(1) = ".format(idx, padded(layer.weight.shape[0]), padded(layer.weight.shape[1])), end="")
-        print_matrix2d(layer.weight, layer.weight.shape[0], layer.weight.shape[1], padded(layer.weight.shape[0]), padded(layer.weight.shape[1]))
+        w = layer.weight.permute(1, 0)
+        print("static const elem_t fc_{}_w[{}][{}] row_align(1) = ".format(idx, padded(w.shape[0]), padded(w.shape[1])), end="")
+        print_matrix2d(w, w.shape[0], w.shape[1], padded(w.shape[0]), padded(w.shape[1]))
         print(";")
 
         if params.bias:
             # Print bias
-            print("static const acc_t fc_{}_b[{}][{}] row_align_acc(1) = ".format(idx, padded(layer.bias.shape[0]), padded(params.batch_size)), end="")
+            print("static const acc_t fc_{}_b[{}][{}] row_align_acc(1) = ".format(idx, padded(params.batch_size), padded(layer.bias.shape[0])), end="")
 
             print("{", end="")
 
-            for i in range(padded(layer.bias.shape[0])):
+            for j in range(padded(params.batch_size)):
                 print("{", end="")
-
-                for j in range(padded(params.batch_size)):
-                    if j == padded(params.batch_size) - 1:
+                for i in range(padded(layer.bias.shape[0])):
+                    if i == padded(layer.bias.shape[0]) - 1:
                         end = ""
                     else:
                         end = ","
 
                     if i < layer.bias.shape[0] and j < params.batch_size:
-                        print(layer.bias[i].item(), end=end)
+                        print(round(layer.bias[i].item(), decimals), end=end)
                     else:
                         print("0", end=end)
 
-                if i == padded(layer.bias.shape[0]) - 1:
+                if j == padded(params.batch_size) - 1:
                     end = ""
                 else:
                     end = ","
@@ -298,16 +302,16 @@ def generate_model_header(model, gemmini_dim, batch_size = 1, decimals = 5):
             print("};")
 
         # Print output
-        print("static elem_t fc_{}_out[{}][{}] row_align(1);".format(idx, padded(params.out_features), padded(params.batch_size)))
+        print("static elem_t fc_{}_out[{}][{}] row_align(1);".format(idx, padded(params.batch_size), padded(params.out_features)))
 
         # Print params
         # print(f"static const struct FcParams fc_{idx}_params = {{.batch_size={params.batch_size}, .in_features={params.in_features}, .out_features={params.out_features}, .bias={int(params.bias)}, .output_scale={-int(log2(params.output_scale))}, .I={padded(params.out_features)}, .J={padded(params.batch_size)}, .K={padded(layer.weight.shape[1])}}};")
-        print(f"static const struct FcParams fc_{idx}_params = {{.batch_size={params.batch_size}, .in_features={params.in_features}, .out_features={params.out_features}, .bias={int(params.bias)}, .output_scale={params.output_scale}, .I={padded(params.out_features)}, .J={padded(params.batch_size)}, .K={padded(layer.weight.shape[1])}}};")
+        print(f"static const struct FcParams fc_{idx}_params = {{.batch_size={params.batch_size}, .in_features={params.in_features}, .out_features={params.out_features}, .bias={int(params.bias)}, .output_scale={params.output_scale}, .I={padded(params.batch_size)}, .J={padded(params.out_features)}, .K={padded(params.in_features)}}};")
 
         layer.quant_params = params
-        layer.quant_params.I = padded(params.out_features)
-        layer.quant_params.J = padded(params.batch_size)
-        layer.quant_params.K = padded(layer.weight.shape[1])
+        layer.quant_params.I = padded(params.batch_size)
+        layer.quant_params.J = padded(params.out_features)
+        layer.quant_params.K = padded(params.in_features)
         layer.quant_params.relu = relu
         layer.quant_params.idx = idx
 
@@ -319,21 +323,22 @@ def generate_model_header(model, gemmini_dim, batch_size = 1, decimals = 5):
                 return True
         return False
 
-    print('''#ifndef MC_MNIST_MODEL_H
-#define MC_MNIST_MODEL_H
+    print('''#ifndef MC_MNIST_MODEL_PARAMS_H
+#define MC_MNIST_MODEL_PARAMS_H
 ''')
 
-    print('''#include <include/gemmini_params.h>
+    print('''#include "gemmini/gemmini_params.h"
+#include "gemmini/gemmini.h"
+#include "gemmini/gemmini_nn.h"
 #include <stdbool.h>
 
-void model(elem_t *images, enum tiled_matmul_type_t tiled_matmul_type, bool check);
 ''')
 
     idx = 1
     res_scale = 1
 
     inner_modules = list(model.modules())
-    for i in tqdm(range(len(inner_modules)), desc="Generating model header", leave=False):
+    for i in tqdm(range(len(inner_modules)), desc="Generating model params header", leave=False):
         layer = inner_modules[i]
 
         # if isinstance(layer, models.resnet.Bottleneck) or isinstance(layer, torchvision.models.resnet.BasicBlock):
@@ -394,21 +399,23 @@ void model(elem_t *images, enum tiled_matmul_type_t tiled_matmul_type, bool chec
     print("#endif\n")
 
 
-def generate_model_src(model: nn.Module):
-    print(r'''#include <stdio.h>
+def generate_model_body(model: nn.Module):
+    print(r'''#ifndef MC_MNIST_MODEL_H
+#define MC_MNIST_MODEL_H
+#include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
-#ifndef BAREMETAL
-#include <sys/mman.h>
-#endif
-#include "include/gemmini.h"
-#include "include/gemmini_nn.h"
+#include "gemmini/gemmini.h"
+#include "gemmini/gemmini_nn.h"
 
-#include "model.h"
+#include "model_params.h"
 
-void model(elem_t *images, enum tiled_matmul_type_t tiled_matmul_type, bool check){
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wincompatible-pointer-types"
+
+static void model(const elem_t *images, enum tiled_matmul_type_t tiled_matmul_type, bool check){
     uint64_t start, end;
-    uint64_t im2col_cycles = 0, matmul_cycles = 0, pool_cycles = 0, conv_dw_cycles = 0, res_add_cycles = 0, other_cycles = 0;
+    uint64_t im2col_cycles = 0, matmul_cycles = 0, conv_cycles = 0, pool_cycles = 0, conv_dw_cycles = 0, res_add_cycles = 0, other_cycles = 0;
 
     gemmini_flush(0);
 ''')
@@ -507,7 +514,8 @@ void model(elem_t *images, enum tiled_matmul_type_t tiled_matmul_type, bool chec
             print(f'''    start = read_cycles();
 
     pool_with_col2im({params_name}.I, {params_name}.J,
-        {params_name}.batch_size, {params_name}.out_channels, {params_name}.out_dim_pooled,
+        {params_name}.batch_size, {params_name}.out_channels,
+        {params_name}.out_dim_pooled, {params_name}.out_dim_pooled,
         {layer_name}_out, {layer_name}_out_pooled, &{params_name});
 
     end = read_cycles();
@@ -533,11 +541,11 @@ void model(elem_t *images, enum tiled_matmul_type_t tiled_matmul_type, bool chec
         # TODO: this identifies the final fc layer in resnet, which is followed by a avgpool. We need a different way to handle this, maybe add other avgpool action
         if isinstance(last, ConvParams) and (isinstance(model, MultiConceptNonDecomposed)):
             print(f'''    // Global averaging
-    static elem_t average[{params.K}][{params.J}] row_align(1);
+    static elem_t average[{params.I}][{params.K}] row_align(1);
 
     start = read_cycles();
-    tiled_global_average_auto(last_output_name, average, {last_params_name}.batch_size,
-        {last_params_name}.out_channels, {last_params_name}.out_row_dim, tiled_matmul_type)
+    tiled_global_average_auto({last_output_name}, average, {last_params_name}.batch_size,
+        {last_params_name}.out_channels, {last_params_name}.out_row_dim, tiled_matmul_type);
     
     end = read_cycles();
     other_cycles += end - start;
@@ -683,7 +691,7 @@ void model(elem_t *images, enum tiled_matmul_type_t tiled_matmul_type, bool chec
 
     final_fc = [mod for mod in model.modules() if isinstance(mod, nn.Linear)][-1]
 
-    for layer in tqdm(model.modules(), desc="Generating model source file", leave=False):
+    for layer in tqdm(model.modules(), desc="Generating model header", leave=False):
 
         if layer == res_downsample:
             res_input = res_downsample_action(layer, res_input)
@@ -713,15 +721,19 @@ void model(elem_t *images, enum tiled_matmul_type_t tiled_matmul_type, bool chec
     print(r'''
     uint64_t total_cycles = im2col_cycles + matmul_cycles + pool_cycles + conv_dw_cycles + res_add_cycles + other_cycles;
 
-    printf("\nTotal cycles: %llu (100%%)\n", total_cycles);
-    printf("Matmul cycles: %llu (%d%%)\n", matmul_cycles, (matmul_cycles * 100) / total_cycles);
-    printf("Im2col cycles: %llu (%d%%)\n", im2col_cycles, (im2col_cycles * 100) / total_cycles);
-    printf("Conv cycles: %llu (%d%%)\n", conv_cycles, (conv_cycles * 100) / total_cycles);
-    printf("Pooling cycles: %llu (%d%%)\n", pool_cycles, (pool_cycles * 100) / total_cycles);
-    printf("Depthwise convolution cycles: %llu (%d%%)\n", conv_dw_cycles, (conv_dw_cycles * 100) / total_cycles);
-    printf("Res add cycles: %llu (%d%%)\n", res_add_cycles, (res_add_cycles * 100) / total_cycles);
-    printf("Other cycles: %llu (%d%%)\n", other_cycles, (other_cycles * 100) / total_cycles);
+    printf("\nTotal cycles: %lu (100%%)\n", total_cycles);
+    printf("Matmul cycles: %lu (%ld%%)\n", matmul_cycles, (matmul_cycles * 100) / total_cycles);
+    printf("Im2col cycles: %lu (%ld%%)\n", im2col_cycles, (im2col_cycles * 100) / total_cycles);
+    printf("Conv cycles: %lu (%ld%%)\n", conv_cycles, (conv_cycles * 100) / total_cycles);
+    printf("Pooling cycles: %lu (%ld%%)\n", pool_cycles, (pool_cycles * 100) / total_cycles);
+    printf("Depthwise convolution cycles: %lu (%ld%%)\n", conv_dw_cycles, (conv_dw_cycles * 100) / total_cycles);
+    printf("Res add cycles: %lu (%ld%%)\n", res_add_cycles, (res_add_cycles * 100) / total_cycles);
+    printf("Other cycles: %lu (%ld%%)\n", other_cycles, (other_cycles * 100) / total_cycles);
 }
+
+#pragma GCC diagnostic pop
+
+#endif
 ''')
 
 #     print(r'''
@@ -825,14 +837,14 @@ if __name__ == "__main__":
 
     # print(list(model.modules()))
 
-    # Dump model header
+    # Dump model headers
+    with open(dump_dir + '/model_params.h', 'w') as f:
+        with redirect_stdout(f):
+            generate_model_params(model, batch_size=1, gemmini_dim=GEMMINI_DIM)
+
     with open(dump_dir + '/model.h', 'w') as f:
         with redirect_stdout(f):
-            generate_model_header(model, gemmini_dim=GEMMINI_DIM)
-
-    with open(dump_dir + '/model.c', 'w') as f:
-        with redirect_stdout(f):
-            generate_model_src(model)
+            generate_model_body(model)
 
     # Dump codebooks
     with open(dump_dir + '/codebooks.h', 'w') as f:
