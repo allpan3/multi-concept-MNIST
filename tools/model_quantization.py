@@ -366,24 +366,25 @@ def test(model, dataloader, max_iter=40, output_scale=None):
     losses = []
     sims = []
     for idx, (images, labels, targets, _) in enumerate(dataloader):
-        images = transforms.ConvertImageDtype(torch.float32)(images.to(device))
-        images.requires_grad = False
-        targets_float = targets.to(device).type(torch.float32)
-        output = model(images)
-        # if idx >= max_iter:
-        #     print(output, output.max(), output.min())
-        # if quantized:
-        #     output = final_output_scaling(output, dataloader.dataset.max_num_objects)
-        if output_scale is not None:
-            output = output / output_scale
-        loss = loss_fn(output, targets_float)
-        losses.append(loss.item())
-        sim = torch.sum(get_cos_similarity(output.round(), targets_float)).item()
-        sims.append(sim)
-        if idx >= max_iter:
-            print(output)
-            print(targets_float)
-            break
+        with torch.no_grad():
+            images = transforms.ConvertImageDtype(torch.float32)(images.to(device))
+            targets_float = targets.to(device).type(torch.float32)
+            output = model(images)
+            # print([round(e, 3) for e in output.tolist()[0]])
+            # if idx >= max_iter:
+            #     print(output, output.max(), output.min())
+            # if quantized:
+            #     output = final_output_scaling(output, dataloader.dataset.max_num_objects)
+            if output_scale is not None:
+                output = output / output_scale
+            loss = loss_fn(output, targets_float)
+            losses.append(loss.item())
+            sim = torch.sum(get_cos_similarity(output.round(), targets_float)).item()
+            sims.append(sim)
+            if idx >= max_iter:
+                print(output)
+                print(targets_float)
+                break
     print(sum(sims)/len(sims))
     print(sum(losses)/len(losses))
 

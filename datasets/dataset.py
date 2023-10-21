@@ -109,6 +109,7 @@ class MultiConceptMNIST(VisionDataset):
                         self.questions += self._load_json(os.path.join(self.root, f"{type}-questions-{n}obj-{num_samples[i]}samples.json"))
         
         self.data = torch.stack(self.data)
+        self.targets = torch.stack(self.targets)
         
 
     def _check_exists(self, type: str, num_obj, num_samples) -> bool:

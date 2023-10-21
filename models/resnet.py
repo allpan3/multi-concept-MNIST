@@ -22,9 +22,9 @@ class Bottleneck(nn.Module):
         self.relu2 = nn.ReLU(inplace=True)
         self.conv3 = conv1x1(width, planes * self.expansion)
         self.bn3 = norm_layer(planes * self.expansion)
-        self.dummy = nn.Identity()
+        self.downsample = downsample           # * The order matter as it affects dumping
+        self.dummy = nn.Identity()             # * This prevents the relu to be applied to conv3 or downsample during dumping
         self.relu3 = nn.ReLU(inplace=True)
-        self.downsample = downsample
         self.stride = stride
         
         self.quantized = False

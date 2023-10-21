@@ -17,5 +17,6 @@ class MultiConceptNonDecomposed(nn.Module):
         self.to(device)
 
     def forward(self, x):
-        return self.output(self.model(x))
-        
+        x = self.model(x)
+        x = self.output(x)
+        return x 
