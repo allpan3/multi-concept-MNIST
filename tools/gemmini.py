@@ -76,9 +76,10 @@ def filter2col(x: torch.Tensor, params: ConvParams) -> torch.Tensor:
     patch_size = params.patch_size
 
     y = torch.empty((patch_size, n_filters), dtype=x.dtype, requires_grad=False)
-    
+
     for n_filter in range(n_filters):
-        y[:, n_filter:n_filter+1] = x[n_filter].view(patch_size, 1)
+        # We need HWIO, originally OIHW, so we need to make it HWI before flattening (so that memory layout becomes [H][W][I]
+        y[:, n_filter:n_filter+1] = x[n_filter].permute(1,2,0).reshape(patch_size, 1)
 
     return y
 
@@ -96,12 +97,15 @@ def bias2col(x: torch.Tensor, params: ConvParams) -> torch.Tensor:
     return y
 
 def im2col(x: torch.Tensor, params: ConvParams) -> torch.Tensor:
+    """
+    Expects input image in (N, C, H, W) format
+    """
     assert x.shape[2] == x.shape[3]
 
     batch_size = params.batch_size
     im_channels = 1 if params.depthwise else params.in_channels
-    im_height = params.in_dim
-    im_width = params.in_dim
+    im_height = params.in_row_dim
+    im_width = params.in_col_dim
     kernel_size = params.kernel_size
     stride = params.stride
     padding = params.padding
@@ -131,5 +135,43 @@ def im2col(x: torch.Tensor, params: ConvParams) -> torch.Tensor:
 
                             patch_col += 1
                 patch_row += 1
+
+    return y
+
+
+def pool_with_col2im(x: torch.Tensor, params: ConvParams) -> torch.Tensor:
+    assert(x.dim() == 2)
+    batch_size = params.batch_size
+    channels = params.out_channels
+    in_row_dim = params.out_row_dim
+    in_col_dim = params.out_col_dim
+    kernel_size = params.pool_size
+    stride = params.pool_stride
+    padding = params.pool_padding
+    # n_patches = params.n_patches
+    # patch_size = params.patch_size 
+    out_row_dim = params.out_dim_pooled
+    out_col_dim = params.out_dim_pooled
+
+    y = torch.empty((batch_size, out_row_dim, out_col_dim, channels), dtype=x.dtype, requires_grad=False)
+
+    for batch in range(batch_size):
+        for channel in range(channels):
+            for out_row in range(out_row_dim):
+                for out_col in range(out_col_dim):
+                    in_row = out_row * stride - padding
+                    pooled = -9999
+                    for kernel_row in range(kernel_size):
+                        in_col = out_col * stride - padding
+                        for kernel_col in range(kernel_size):
+                            if in_row >= 0 and in_row < in_row_dim and in_col >= 0 and in_col < in_col_dim:
+                                if x[batch*in_row_dim*in_col_dim + in_row*in_col_dim + in_col][channel] > pooled:
+                                    pooled = x[batch*in_row_dim*in_col_dim + in_row*in_col_dim + in_col][channel]
+                            else:
+                                if 0 > pooled:
+                                    pooled = 0
+                            in_col += 1
+                        in_row += 1
+                    y[batch][out_row][out_col][channel] = pooled
 
     return y

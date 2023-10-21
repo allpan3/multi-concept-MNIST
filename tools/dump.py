@@ -78,10 +78,12 @@ def generate_image_header(images: Tensor, scaling_factor = None):
     print(";\n\n#endif\n")
 
 def generate_codebook_header(vsa):
-    print(r'''#ifndef MC_MNIST_CODEBOOKS_H
+    print(f'''#ifndef MC_MNIST_CODEBOOKS_H
 #define MC_MNIST_CODEBOOKS_H
 
 #include <stdint.h>
+
+#define NUM_CODEBOOKS {len(vsa.codebooks)}
 ''')
 
     for i, codebook in enumerate(tqdm(vsa.codebooks, desc="Generating codebooks", leave=False)):
@@ -95,6 +97,17 @@ def generate_codebook_header(vsa):
         print(";")
 
     print("\n\n#endif\n")
+
+def generate_target_header(targets: Tensor):
+    print(r'''#ifndef MC_MNIST_TARGETS_H
+#define MC_MNIST_TARGETS_H
+
+#include <stdint.h>
+''')
+    print(f"static const int8_t target_vectors[{targets.size(0)}][{targets.size(1)}] = ", end="")
+    print_tensor(targets)
+    print(";\n\n#endif\n")
+
 
 def generate_labels(labels: list, filename):
     """
@@ -327,10 +340,12 @@ def generate_model_params(model, gemmini_dim, batch_size = 1, decimals = 5):
 #define MC_MNIST_MODEL_PARAMS_H
 ''')
 
-    print('''#include "gemmini/gemmini_params.h"
+    print(f'''#include "gemmini/gemmini_params.h"
 #include "gemmini/gemmini.h"
 #include "gemmini/gemmini_nn.h"
 #include <stdbool.h>
+
+#define BATCH_SIZE {batch_size}
 
 ''')
 
@@ -358,7 +373,7 @@ def generate_model_params(model, gemmini_dim, batch_size = 1, decimals = 5):
             ] 
 
             j = i + 1
-            while j < len(inner_modules) and is_follow_on_module(inner_modules[j]):
+            while j < len(inner_modules) and (is_follow_on_module(inner_modules[j]) or len(list(inner_modules[j].children())) != 0):
                 if isinstance(inner_modules[j], nn.modules.pooling.MaxPool2d):
                     pool_size = inner_modules[j].kernel_size
                     pool_stride = inner_modules[j].stride
@@ -386,7 +401,7 @@ def generate_model_params(model, gemmini_dim, batch_size = 1, decimals = 5):
                 return False
 
             j = i + 1
-            while j < len(inner_modules) and is_follow_on_module(inner_modules[j]):
+            while j < len(inner_modules) and (is_follow_on_module(inner_modules[j]) or len(list(inner_modules[j].children())) != 0):
                 if isinstance(inner_modules[j], nn.modules.activation.ReLU) or isinstance(inner_modules[j], nn.modules.activation.ReLU6):
                     relu = True
 
@@ -400,26 +415,6 @@ def generate_model_params(model, gemmini_dim, batch_size = 1, decimals = 5):
 
 
 def generate_model_body(model: nn.Module):
-    print(r'''#ifndef MC_MNIST_MODEL_H
-#define MC_MNIST_MODEL_H
-#include <stdio.h>
-#include <string.h>
-#include <stdbool.h>
-#include "gemmini/gemmini.h"
-#include "gemmini/gemmini_nn.h"
-
-#include "model_params.h"
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wincompatible-pointer-types"
-
-static void model(const elem_t *images, enum tiled_matmul_type_t tiled_matmul_type, bool check){
-    uint64_t start, end;
-    uint64_t im2col_cycles = 0, matmul_cycles = 0, conv_cycles = 0, pool_cycles = 0, conv_dw_cycles = 0, res_add_cycles = 0, other_cycles = 0;
-
-    gemmini_flush(0);
-''')
-
     def name_of_output(params):
         if isinstance(params, ConvParams):
             if params.depthwise:
@@ -655,7 +650,7 @@ static void model(const elem_t *images, enum tiled_matmul_type_t tiled_matmul_ty
         initial_params_name = name_of_params(res_input)
         last_params_name = name_of_params(last)
 
-        relu = "true" # Out model so far always has relu after res add
+        relu = "true" # ! Our model so far always has relu after res add (the conv2 revolved in res_add should have relu set to false)
 
         print(f'''    // Add residuals
     start = read_cycles();
@@ -666,7 +661,7 @@ static void model(const elem_t *images, enum tiled_matmul_type_t tiled_matmul_ty
         {initial_input},
         {last_output},
         {last_output},
-        true,
+        {relu},
         tiled_matmul_type == CPU ? CPU : WS);
 
     end = read_cycles();
@@ -690,6 +685,29 @@ static void model(const elem_t *images, enum tiled_matmul_type_t tiled_matmul_ty
     res_downsample = None # Used for ResNet
 
     final_fc = [mod for mod in model.modules() if isinstance(mod, nn.Linear)][-1]
+    
+    print(r'''#ifndef MC_MNIST_MODEL_H
+#define MC_MNIST_MODEL_H
+#include <stdio.h>
+#include <string.h>
+#include <stdbool.h>
+#include "gemmini/gemmini.h"
+#include "gemmini/gemmini_nn.h"
+
+#include "model_params.h"
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wincompatible-pointer-types"
+''')
+
+    print(f"typedef elem_t fc_t[BATCH_SIZE][{final_fc.quant_params.out_features}];")
+
+    print(r'''static fc_t *model(const elem_t *images, enum tiled_matmul_type_t tiled_matmul_type, bool check){
+    uint64_t start, end;
+    uint64_t im2col_cycles = 0, matmul_cycles = 0, conv_cycles = 0, pool_cycles = 0, conv_dw_cycles = 0, res_add_cycles = 0, other_cycles = 0;
+
+    gemmini_flush(0);
+''')
 
     for layer in tqdm(model.modules(), desc="Generating model header", leave=False):
 
@@ -713,26 +731,26 @@ static void model(const elem_t *images, enum tiled_matmul_type_t tiled_matmul_ty
 
         if res_add_layer == layer:   # last layer in a residual block
             last = res_add_action(res_input, last) # res_input should already be pointed to the correct input, either downsampled or not
-    
-    # Now print the classes with the highest probability
+
     last_params = name_of_params(last)
     last_output = name_of_output(last)
 
-    print(r'''
-    uint64_t total_cycles = im2col_cycles + matmul_cycles + pool_cycles + conv_dw_cycles + res_add_cycles + other_cycles;
+    print(f'''uint64_t total_cycles = im2col_cycles + matmul_cycles + pool_cycles + conv_dw_cycles + res_add_cycles + other_cycles;
 
-    printf("\nTotal cycles: %lu (100%%)\n", total_cycles);
-    printf("Matmul cycles: %lu (%ld%%)\n", matmul_cycles, (matmul_cycles * 100) / total_cycles);
-    printf("Im2col cycles: %lu (%ld%%)\n", im2col_cycles, (im2col_cycles * 100) / total_cycles);
-    printf("Conv cycles: %lu (%ld%%)\n", conv_cycles, (conv_cycles * 100) / total_cycles);
-    printf("Pooling cycles: %lu (%ld%%)\n", pool_cycles, (pool_cycles * 100) / total_cycles);
-    printf("Depthwise convolution cycles: %lu (%ld%%)\n", conv_dw_cycles, (conv_dw_cycles * 100) / total_cycles);
-    printf("Res add cycles: %lu (%ld%%)\n", res_add_cycles, (res_add_cycles * 100) / total_cycles);
-    printf("Other cycles: %lu (%ld%%)\n", other_cycles, (other_cycles * 100) / total_cycles);
-}
+    printf("\\nTotal cycles: %lu (100%%)\\n", total_cycles);
+    printf("Matmul cycles: %lu (%ld%%)\\n", matmul_cycles, (matmul_cycles * 100) / total_cycles);
+    printf("Im2col cycles: %lu (%ld%%)\\n", im2col_cycles, (im2col_cycles * 100) / total_cycles);
+    printf("Conv cycles: %lu (%ld%%)\\n", conv_cycles, (conv_cycles * 100) / total_cycles);
+    printf("Pooling cycles: %lu (%ld%%)\\n", pool_cycles, (pool_cycles * 100) / total_cycles);
+    printf("Depthwise convolution cycles: %lu (%ld%%)\\n", conv_dw_cycles, (conv_dw_cycles * 100) / total_cycles);
+    printf("Res add cycles: %lu (%ld%%)\\n", res_add_cycles, (res_add_cycles * 100) / total_cycles);
+    printf("Other cycles: %lu (%ld%%)\\n", other_cycles, (other_cycles * 100) / total_cycles);
+
+    return &{last_output};
+''')
+    print('''}
 
 #pragma GCC diagnostic pop
-
 #endif
 ''')
 
@@ -835,7 +853,17 @@ if __name__ == "__main__":
     # If not quantize, still need to run profiling to get the input shape of each layer
     profile_model(model, quan_dl)
 
-    # print(list(model.modules()))
+    # for i, v in enumerate(x.permute(0, 2, 3, 1)):
+    #     for j, q in enumerate(v):
+    #         for k, p in enumerate(q):
+    #             for (o, w) in enumerate(p):
+    #                 print(f"[{i}][{j}][{k}][{o}] =", "{:.3f}".format(w.item()), end="\t")
+    #             print()
+
+    # for i, v in enumerate(im):
+    #     for j, q in enumerate(v):
+    #         print(f"[{i}][{j}] =", "{:.3f}".format(q.item()), end="\t")
+    #     print()
 
     # Dump model headers
     with open(dump_dir + '/model_params.h', 'w') as f:
@@ -850,6 +878,12 @@ if __name__ == "__main__":
     with open(dump_dir + '/codebooks.h', 'w') as f:
         with redirect_stdout(f):
             generate_codebook_header(vsa)
+    
+    # Dump targets
+    # No easy way to read in json file in baremetal form, so we'll dump out the ground-truth vector for each test
+    with open(dump_dir + "/targets.h", 'w') as f:
+        with redirect_stdout(f):
+            generate_target_header(dl.dataset.targets)
 
     # Dump test image header and PNGs
     with open(dump_dir + '/images.h', 'w') as f:
