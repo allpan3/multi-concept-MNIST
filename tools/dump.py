@@ -816,21 +816,13 @@ def generate_model_body(model: nn.Module):
 if __name__ == "__main__":
     test_dir = f"./tests/{VSA_MODE}-{DIM}dim{'-' + str(FOLD_DIM) + 'fd' if VSA_MODE=='HARDWARE' else ''}-{NUM_POS_X}x-{NUM_POS_Y}y-{NUM_COLOR}color/{ALGO}"
     parser = argparse.ArgumentParser(description="Dump model and test data to C")
-    parser.add_argument("checkpoint", type=str, help="model checkpoint")
-    parser.add_argument("--codebooks", type=str, help="codebook file path", default=None)
+    parser.add_argument("checkpoint", type=str, help="Model checkpoint", nargs="?", default=None)
+    parser.add_argument("--codebooks", type=str, help="Codebook file path", default=None)
+    parser.add_argument("--dump_png", help="Dump image png files", action="store_true")
 
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = MultiConceptNonDecomposed(dim=DIM, device=device)
-    model.eval()
-
-    if os.path.exists(args.checkpoint):
-        checkpoint = torch.load(args.checkpoint, map_location=device)
-        model.load_state_dict(checkpoint)
-    else:
-        print("Invalid model checkpoint path.")
-        exit(1)
 
     vsa = get_vsa(test_dir, VSA_MODE, ALGO, args.codebooks, DIM, MAX_NUM_OBJECTS, NUM_COLOR, NUM_POS_X, NUM_POS_Y, FOLD_DIM, EHD_BITS, SIM_BITS, SEED, device)
     dl = get_test_data(test_dir, vsa, False, NUM_TEST_SAMPLES, MAX_NUM_OBJECTS, SINGLE_COUNT, 1, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
@@ -838,7 +830,7 @@ if __name__ == "__main__":
 
     # TODO Can enable transform in dataset and pass this as a parameter, but must make sure the data to be loaded isn't too large (e.g. training ds) as it's costly for memory
     transform = transforms.Compose([
-            # transforms.Resize(224, antialiased = True),
+            # transforms.Resize(224, antialias = True),
             transforms.ConvertImageDtype(torch.float32)  # Converts to [0, 1]
         ])
 
@@ -847,51 +839,64 @@ if __name__ == "__main__":
     dump_dir = "./dump"
     os.makedirs(dump_dir, exist_ok=True)
 
-    print("Quantizing/Profiling model...")
-    # quantize_model(model, quan_dl)
+    if args.dump_png:
+        generate_image_png(images, dump_dir + '/images')
 
-    # If not quantize, still need to run profiling to get the input shape of each layer
-    profile_model(model, quan_dl)
+    else:
+        model = MultiConceptNonDecomposed(dim=DIM, device=device)
+        model.eval()
 
-    # for i, v in enumerate(x.permute(0, 2, 3, 1)):
-    #     for j, q in enumerate(v):
-    #         for k, p in enumerate(q):
-    #             for (o, w) in enumerate(p):
-    #                 print(f"[{i}][{j}][{k}][{o}] =", "{:.3f}".format(w.item()), end="\t")
-    #             print()
+        if os.path.exists(args.checkpoint):
+            checkpoint = torch.load(args.checkpoint, map_location=device)
+            model.load_state_dict(checkpoint)
+        else:
+            print("Invalid model checkpoint path.")
+            exit(1)
 
-    # for i, v in enumerate(im):
-    #     for j, q in enumerate(v):
-    #         print(f"[{i}][{j}] =", "{:.3f}".format(q.item()), end="\t")
-    #     print()
+        print("Quantizing/Profiling model...")
+        # quantize_model(model, quan_dl)
 
-    # Dump model headers
-    with open(dump_dir + '/model_params.h', 'w') as f:
-        with redirect_stdout(f):
-            generate_model_params(model, batch_size=1, gemmini_dim=GEMMINI_DIM)
+        # If not quantize, still need to run profiling to get the input shape of each layer
+        profile_model(model, quan_dl)
 
-    with open(dump_dir + '/model.h', 'w') as f:
-        with redirect_stdout(f):
-            generate_model_body(model)
+        # for i, v in enumerate(x.permute(0, 2, 3, 1)):
+        #     for j, q in enumerate(v):
+        #         for k, p in enumerate(q):
+        #             for (o, w) in enumerate(p):
+        #                 print(f"[{i}][{j}][{k}][{o}] =", "{:.3f}".format(w.item()), end="\t")
+        #             print()
 
-    # Dump codebooks
-    with open(dump_dir + '/codebooks.h', 'w') as f:
-        with redirect_stdout(f):
-            generate_codebook_header(vsa)
-    
-    # Dump targets
-    # No easy way to read in json file in baremetal form, so we'll dump out the ground-truth vector for each test
-    with open(dump_dir + "/targets.h", 'w') as f:
-        with redirect_stdout(f):
-            generate_target_header(dl.dataset.targets)
+        # for i, v in enumerate(im):
+        #     for j, q in enumerate(v):
+        #         print(f"[{i}][{j}] =", "{:.3f}".format(q.item()), end="\t")
+        #     print()
 
-    # Dump test image header and PNGs
-    with open(dump_dir + '/images.h', 'w') as f:
-        with redirect_stdout(f):
-            generate_image_header(images)
-    generate_image_png(images, dump_dir + '/images')
+        # Dump model headers
+        with open(dump_dir + '/model_params.h', 'w') as f:
+            with redirect_stdout(f):
+                generate_model_params(model, batch_size=1, gemmini_dim=GEMMINI_DIM)
 
-    # Dump test labels
-    generate_labels(dl.dataset.labels, dump_dir + '/labels.json')
+        with open(dump_dir + '/model.h', 'w') as f:
+            with redirect_stdout(f):
+                generate_model_body(model)
 
-    print("[ Done ]")
+        # Dump codebooks
+        with open(dump_dir + '/codebooks.h', 'w') as f:
+            with redirect_stdout(f):
+                generate_codebook_header(vsa)
+        
+        # Dump targets
+        # No easy way to read in json file in baremetal form, so we'll dump out the ground-truth vector for each test
+        with open(dump_dir + "/targets.h", 'w') as f:
+            with redirect_stdout(f):
+                generate_target_header(dl.dataset.targets)
+
+        # Dump test image header
+        with open(dump_dir + '/images.h', 'w') as f:
+            with redirect_stdout(f):
+                generate_image_header(images)
+
+        # Dump test labels
+        generate_labels(dl.dataset.labels, dump_dir + '/labels.json')
+
+        print("[ Done ]")
