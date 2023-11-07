@@ -61,7 +61,7 @@ def get_cos_similarity(input, others):
     """
     input_dot = torch.sum(input * input, dim=-1)
     input_mag = torch.sqrt(input_dot)
-    others_dot = torch.sum(others * others, dim=-1)
+    others_dot = torch.sum(others * others, dim=-1).to(input.device)
     others_mag = torch.sqrt(others_dot)
     if input.dim() >= 2:
         magnitude = input_mag.unsqueeze(-1) * others_mag.unsqueeze(-2)
@@ -72,7 +72,7 @@ def get_cos_similarity(input, others):
     if others.dim() >= 2:
         others = others.transpose(-2, -1)
 
-    return torch.matmul(input.type(torch.float32), others.type(torch.float32)) / magnitude
+    return torch.matmul(input.type(torch.float32), others.type(torch.float32).to(input.device)) / magnitude
 
 
 def get_transform():
@@ -90,7 +90,7 @@ def get_transform():
             transforms.ConvertImageDtype(torch.float32)  # Converts to [0, 1]
         ])
 
-def factorization_algo1(vsa, rn, inputs, init_estimates, codebooks=None, known=None):
+def factorization_algo1(vsa, rn, inputs, init_estimates, count=None, codebooks=None, known=None):
 
     inputs = inputs.clone()
     init_estimates = init_estimates.clone()
@@ -117,6 +117,7 @@ def factorization_algo1(vsa, rn, inputs, init_estimates, codebooks=None, known=N
         inputs_ = vsa.quantize(inputs)
 
         # # Apply stochasticity to initial estimates
+        # So far performance is good even without this. Haven't seen too big of a difference.
         # if vsa.mode == "HARDWARE":
         #     # This is one way to randomize the initial estimates
         #     init_estimates = vsa.ca90(init_estimates)
@@ -149,29 +150,43 @@ def factorization_algo1(vsa, rn, inputs, init_estimates, codebooks=None, known=N
 
             debug_message += f"DEBUG: outcome = {outcome[i]}, sim_orig = {round(sim_orig.item()/DIM, 3)}, sim_remain = {round(sim_remain.item()/DIM, 3)}, energy_left = {round(vsa.energy(inputs[i]).item()/DIM,3)}, iter = {iter}, {converge}, {explained}\n"
 
-        # The early terminate part can only be supported with batch size = 1
+        # TODO The early terminate part can only be supported with batch size = 1. Need to enhance
         assert TEST_BATCH_SIZE == 1, "Batch size != 1 is not yet supported"
         # If the final t trial all generate low similarity, likely no more vectors to be extracted and stop
         t = 3
         if (k >= t-1):
             try:
-                if (all(torch.stack(sim_to_remain_all[0][-t:]) < int(vsa.dim * EARLY_TERM_THRESHOLD))):
+                if ((torch.stack(sim_to_remain_all[0][-t:]) < int(vsa.dim * EARLY_TERM_THRESHOLD)).all()):
                     break
             except:
                 pass
 
         # If energy left in the input is too low, likely no more vectors to be extracted and stop
         # When inputs are batched, must wait until all inputs are exhausted
-        if (all(vsa.energy(inputs) <= int(vsa.dim * ENERGY_THRESHOLD))):
+        if ((vsa.energy(inputs) <= int(vsa.dim * ENERGY_THRESHOLD)).all()):
             break
 
-    # Filter output based on similarity threshold
-    for i in range(len(inputs)):
-        debug_message += f"DEBUG: pre-filtered: {outcomes[i]}\n"
-        outcomes[i] = [outcomes[i][j] for j in range(len(outcomes[i])) if sim_to_orig[i][j] >= int(vsa.dim * SIM_DETECT_THRESHOLD)]
-        # Since we know there'll be no overlapped objects in this workload, we can filter out duplicates
-        # Duplicates can appear if one of the objects is more similar to the input than the other (due to biased noise of NN)
-        # outcomes[i] = list(set(outcomes[i]))
+    # When the count is known, rank the results by similarity and pick the top k
+    if COUNT_KNOWN: 
+        # Among all qualified outcomes, select the n closest to the original input
+        # Split batch results
+        for i in range(len(inputs)):
+            debug_message += f"DEBUG: pre-ranked: {outcomes[i]}\n"
+            # It's possible that none of the vectors extracted are similar enough to be considered as condidates
+            if len(outcomes[i]) != 0:
+                # Ranking by similarity to the original inputs
+                # * Note only rank the qualified candidates instead of the full list, because of multiple problems (e.g. the same object may get extracted multiple times and we dont want to use set to uniqify them (feel like cheating))
+                sim_to_orig[i], outcomes[i] = list(zip(*sorted(zip(sim_to_orig[i], outcomes[i]), key=lambda k: k[0], reverse=True)))
+            # Only keep the top n
+            outcomes[i] = outcomes[i][0:count]
+    else:
+        # Filter output based on similarity threshold
+        for i in range(len(inputs)):
+            debug_message += f"DEBUG: pre-filtered: {outcomes[i]}\n"
+            outcomes[i] = [outcomes[i][j] for j in range(len(outcomes[i])) if sim_to_orig[i][j] >= int(vsa.dim * SIM_DETECT_THRESHOLD)]
+            # Since we know there'll be no overlapped objects in this workload, we can filter out duplicates
+            # Duplicates can appear if one of the objects is more similar to the input than the others (due to biased noise of NN)
+            # outcomes[i] = list(set(outcomes[i]))
     
     counts = [len(outcomes[i]) for i in range(len(outcomes))]
 
@@ -199,6 +214,9 @@ def test_algo1(vsa, model, test_dl, device):
     incorrect_count = [0] * MAX_NUM_OBJECTS
     unconverged = [[0,0] for _ in range(MAX_NUM_OBJECTS)]    # [correct, incorrect]
     total_iters = [0] * MAX_NUM_OBJECTS
+    max_sim = [[0,0] for _ in range(MAX_NUM_OBJECTS)] # [correct, incorrect]
+    min_sim = [[1,1] for _ in range(MAX_NUM_OBJECTS)]
+    avg_sim = [[0,0] for _ in range(MAX_NUM_OBJECTS)]
     n = 0
     for images, labels, targets, _ in tqdm(test_dl, desc="Test", leave=True if VERBOSE >= 1 else False):
         images = get_transform()(images.to(device))
@@ -210,10 +228,11 @@ def test_algo1(vsa, model, test_dl, device):
         else:
             # round() will round numbers near 0 to 0, which is not ideal when there's one object, since the vector should be bipolar (either 1 or -1)
             # But 0 is legitimate when there are even number of multiple objects.
-            infer_result = infer_result.round().type(torch.int8)
+            infer_result = infer_result.round().type(vsa.dtype)
 
         # Factorization
-        outcomes, convergences, iters, counts, debug_message = factorization_algo1(vsa, rn, infer_result, init_estimates)
+        # TODO count currently assumes all tests in the batch have the same number of objects. Need to enhance
+        outcomes, convergences, iters, counts, debug_message = factorization_algo1(vsa, rn, infer_result, init_estimates, count=len(labels[0]))
 
         # Compare results
         # Batch: multiple samples
@@ -247,13 +266,24 @@ def test_algo1(vsa, model, test_dl, device):
                 else:
                     message += "Object {} is correctly detected. Similarity = {}".format(label[j], sim_per_obj) + "\n"
 
+            # Infer result similarty
+            infer_sim = get_cos_similarity(infer_result[i], targets[i]).item()
+
+            def collect_sim(val, num_objs, correct):
+                idx = 0 if correct else 1
+                if val > max_sim[num_objs-1][idx]:
+                    max_sim[num_objs-1][idx] = val
+                if val < min_sim[num_objs-1][idx]:
+                    min_sim[num_objs-1][idx] = val
+                avg_sim[num_objs-1][idx] += val
+
             if incorrect:
                 unconverged[len(label)-1][1] += convergence
                 incorrect_count[len(label)-1] += 1
+                collect_sim(infer_sim, len(label), correct=False)
                 if (VERBOSE >= 1):
                     print(Fore.BLUE + f"Test {n} Failed" + Fore.RESET)
-                    print("Inference result similarity = {:.3f}".format(get_cos_similarity(infer_result[i], targets[i]).item()))
-                    # print("Per-object similarity = {}".format(sim_per_obj))
+                    print("Inference result similarity = {:.3f}".format(infer_sim))
                     print(f"Unconverged: {convergence}")
                     print(f"Iterations: {iter}")
                     print(message[:-1])
@@ -261,16 +291,25 @@ def test_algo1(vsa, model, test_dl, device):
                     print("Outcome: {}".format(outcome))
             else:
                 unconverged[len(label)-1][0] += convergence
+                collect_sim(infer_sim, len(label), correct=True)
                 if (VERBOSE >= 2):
                     print(Fore.BLUE + f"Test {n} Passed" + Fore.RESET)
-                    print("Inference result similarity = {:.3f}".format(get_cos_similarity(infer_result[i], targets[i]).item()))
+                    print("Inference result similarity = {:.3f}".format(infer_sim))
                     print(f"Unconverged: {convergence}")
                     print(f"Iterations: {iter}")
                     print(message[:-1])
                     print(debug_message[:-1])
             n += 1
 
-    return incorrect_count, unconverged, total_iters
+    for i in range(MAX_NUM_OBJECTS):
+        avg_sim[i][0] = "N/A" if incorrect_count[i] == NUM_TEST_SAMPLES_PER_OBJ else round(avg_sim[i][0] / (NUM_TEST_SAMPLES_PER_OBJ - incorrect_count[i]), 3)
+        avg_sim[i][1] = "N/A" if incorrect_count[i] == 0 else round(avg_sim[i][1] / incorrect_count[i], 3)
+        max_sim[i][0] = round(max_sim[i][0], 3)
+        max_sim[i][1] = round(max_sim[i][1], 3)
+        min_sim[i][0] = round(min_sim[i][0], 3)
+        min_sim[i][1] = round(min_sim[i][1], 3)
+
+    return incorrect_count, unconverged, total_iters, (avg_sim, max_sim, min_sim)
 
 # TODO outdated
 def test_algo2(vsa, model, test_dl, device):
@@ -386,7 +425,7 @@ def reason_algo1(vsa, model, test_dl, device):
     for images, labels, targets, questions in tqdm(test_dl, desc="Reason", leave=True if VERBOSE >= 1 else False):
         images = get_transform()(images.to(device))
         infer_result = model(images)
-        infer_result = infer_result.round().type(torch.int8) 
+        infer_result = infer_result.round().type(vsa.dtype)
         # infer_result = targets
 
         # Only supports batch size = 1
@@ -482,10 +521,14 @@ if __name__ == "__main__":
     parser.add_argument("action", type=str, help="train, test, datagen, eval, reason")
     parser.add_argument("checkpoint", type=str, help="model checkpoint", nargs='?', default=None)
     parser.add_argument("--codebooks", type=str, help="codebook file path", default=None)
+    parser.add_argument("--device", type=str, help="device", default=None)
 
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    if args.device is not None:
+        device = args.device
+
     print(f"Workload Config: algorithm = {ALGO}, vsa mode = {VSA_MODE}, dim = {DIM}, num pos x = {NUM_POS_X}, num pos y = {NUM_POS_Y}, num color = {NUM_COLOR}, num digits = 10, max num objects = {MAX_NUM_OBJECTS}")
 
     vsa = get_vsa(test_dir, VSA_MODE, ALGO, args.codebooks, DIM, MAX_NUM_OBJECTS, NUM_COLOR, NUM_POS_X, NUM_POS_Y, FOLD_DIM, EHD_BITS, SIM_BITS, SEED, device)
@@ -527,27 +570,32 @@ if __name__ == "__main__":
 
         print(Fore.CYAN + f"""
 Resonator setup:  max_trials = {MAX_TRIALS}, energy_thresh = {ENERGY_THRESHOLD}, similarity_explain_thresh = {SIM_EXPLAIN_THRESHOLD}, \
-similarity_detect_thresh = {SIM_DETECT_THRESHOLD}, expanded_hd_bits = {EHD_BITS}, int_reg_bits = {SIM_BITS}, 
+similarity_detect_thresh = {SIM_DETECT_THRESHOLD}, fold_dim = {FOLD_DIM}, ehd_reg_bits = {EHD_BITS}, sim_reg_bits = {SIM_BITS}, 
 resonator = {RESONATOR_TYPE}, iterations = {NUM_ITERATIONS}, stochasticity = {STOCHASTICITY}, randomness = {RANDOMNESS}, \
-activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY_CONVERGE}
+activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY_CONVERGE}, count_known = {COUNT_KNOWN}
 """ + Fore.RESET)
 
         test_dl = get_test_data(test_dir, vsa, False, NUM_TEST_SAMPLES, MAX_NUM_OBJECTS, SINGLE_COUNT, TEST_BATCH_SIZE, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
-        quan_dl = get_test_data(test_dir, vsa, True, NUM_TEST_SAMPLES if NUM_TEST_SAMPLES < 300 else 300, MAX_NUM_OBJECTS, SINGLE_COUNT, TEST_BATCH_SIZE, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
 
         if QUANTIZE_MODEL:
+            quan_dl = get_test_data(test_dir, vsa, True, NUM_TEST_SAMPLES if NUM_TEST_SAMPLES < 300 else 300, MAX_NUM_OBJECTS, SINGLE_COUNT, TEST_BATCH_SIZE, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
             quantize_model(model, quan_dl)
 
         if ALGO == "algo1":
-            incorrect_count, unconverged, total_iters = test_algo1(vsa, model, test_dl, device)
+            incorrect_count, unconverged, total_iters, (avg_sim, max_sim, min_sim) = test_algo1(vsa, model, test_dl, device)
         elif ALGO == "algo2":
             incorrect_count, unconverged, total_iters = test_algo2(vsa, model, test_dl, device)
 
         if SINGLE_COUNT:
             print(f"{MAX_NUM_OBJECTS} objects: Accuracy = {NUM_TEST_SAMPLES - incorrect_count[MAX_NUM_OBJECTS-1]}/{NUM_TEST_SAMPLES}   Unconverged = {unconverged[MAX_NUM_OBJECTS-1]}    Average iterations: {total_iters[MAX_NUM_OBJECTS-1] / (NUM_TEST_SAMPLES)}")
+            print(f"{MAX_NUM_OBJECTS} objects: Average similarity = {avg_sim[MAX_NUM_OBJECTS-1]}   Max similarity = {max_sim[MAX_NUM_OBJECTS-1]}    Min similarity = {min_sim[MAX_NUM_OBJECTS-1]}")
         else:
             for i in range(MAX_NUM_OBJECTS):
                 print(f"{i+1} objects: Accuracy = {NUM_TEST_SAMPLES//MAX_NUM_OBJECTS - incorrect_count[i]}/{NUM_TEST_SAMPLES//MAX_NUM_OBJECTS}   Unconverged = {unconverged[i]}    Average iterations: {total_iters[i] / (NUM_TEST_SAMPLES//MAX_NUM_OBJECTS)}")
+            for i in range(MAX_NUM_OBJECTS):
+                print(f"{i+1} objects: Average similarity = {avg_sim[i]}   Max similarity = {max_sim[i]}    Min similarity = {min_sim[i]}")
+            
+ 
 
     elif args.action == "eval":
         assert TEST_BATCH_SIZE == 1, "Evaluation mode only supports batch size = 1 so far"
@@ -581,7 +629,7 @@ activation = {ACTIVATION}, act_val = {ACT_VALUE}, early_converge_thresh = {EARLY
             else:
                 # round() will round numbers near 0 to 0, which is not ideal when there's one object, since the vector should be bipolar (either 1 or -1)
                 # But 0 is legitimate when there are even number of multiple objects.
-                infer_result = infer_result.round().type(torch.int8)
+                infer_result = infer_result.round().type(vsa.dtype)
 
             vector_quantized = False if ALGO == "algo1" else True
             sim = torch.sum(get_cos_similarity(infer_result, targets)).item()
