@@ -131,7 +131,7 @@ def generate_labels(labels: list, filename):
     with open(filename, "w") as f:
         json.dump(label_set, f)
 
-def generate_model_params(model, gemmini_dim, batch_size = 1, decimals = 5):
+def generate_model_params(model, batch_size = 1, decimals = 5):
     """
     Dump out model as a header file
     This function takes a unquantized model (for now)
@@ -162,6 +162,7 @@ def generate_model_params(model, gemmini_dim, batch_size = 1, decimals = 5):
 
     def padded(dim: int) -> int:
         return dim
+        # Looks like not needed anymore
         # return int(ceil(dim / gemmini_dim)) * gemmini_dim
 
     def conv_header(layer: nn.Conv2d, idx: int, pool_size: int, pool_stride: int, pool_padding: int, relu: bool):
@@ -874,7 +875,7 @@ if __name__ == "__main__":
         # Dump model headers
         with open(dump_dir + '/model_params.h', 'w') as f:
             with redirect_stdout(f):
-                generate_model_params(model, batch_size=1, gemmini_dim=GEMMINI_DIM)
+                generate_model_params(model, batch_size=1)
 
         with open(dump_dir + '/model.h', 'w') as f:
             with redirect_stdout(f):
