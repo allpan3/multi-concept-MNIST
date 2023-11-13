@@ -17,26 +17,35 @@ COUNT_KNOWN = True
 FOLD_DIM = 128
 EHD_BITS = 8
 SIM_BITS = 13
+
 # Train
-TRAIN_EPOCH = 100
+TRAIN_EPOCH = 50
 TRAIN_BATCH_SIZE = 128
 NUM_TRAIN_SAMPLES = 100000
 # Test
 TEST_BATCH_SIZE = 1
-NUM_TEST_SAMPLES_PER_OBJ = 100
+NUM_TEST_SAMPLES_PER_OBJ = 1000
 NUM_TEST_SAMPLES = NUM_TEST_SAMPLES_PER_OBJ if SINGLE_COUNT else NUM_TEST_SAMPLES_PER_OBJ * MAX_NUM_OBJECTS
+
+PROFILING = True # True, False
+PROFILING_SIZE = NUM_TEST_SAMPLES // TEST_BATCH_SIZE   # Divide by batch size to always record the same number of samples
+if PROFILING:
+    NUM_TEST_SAMPLES = (PROFILING_SIZE + MAX_NUM_OBJECTS) * TEST_BATCH_SIZE  # To account for the warmup batch
+
+assert(NUM_TEST_SAMPLES % TEST_BATCH_SIZE == 0)
+
 # Resonator
 RESONATOR_TYPE = "SEQUENTIAL" # "SEQUENTIAL", "CONCURRENT"
 MAX_TRIALS = MAX_NUM_OBJECTS + 10
 NUM_ITERATIONS = 200
 ACTIVATION = 'THRESH_AND_SCALE'      # 'IDENTITY', 'THRESHOLD', 'SCALEDOWN', "THRESH_AND_SCALE"
-ACT_VALUE = 16
+ACT_VALUE = 32
 STOCHASTICITY = "SIMILARITY"  # apply stochasticity: "NONE", "SIMILARITY", "VECTOR"
-RANDOMNESS = 0.04
+RANDOMNESS = 0.03
 # Similarity thresholds are affected by the maximum number of vectors superposed. These values need to be lowered when more vectors are superposed
-SIM_EXPLAIN_THRESHOLD = 0.20                 # When count is known, we can typically use a lower threshold. Still can't be too low otherwise the same object may get counted multiple times
-SIM_DETECT_THRESHOLD = 0.15
-ENERGY_THRESHOLD = 0.25
+SIM_EXPLAIN_THRESHOLD = 0.25                 # When count is known, we can typically use a lower threshold. Still can't be too low otherwise the same object may get counted multiple times
+SIM_DETECT_THRESHOLD = 0.12
+ENERGY_THRESHOLD = 0.20
 EARLY_CONVERGE = 0.6
 EARLY_TERM_THRESHOLD = 0.15     # Compared to remaining
 

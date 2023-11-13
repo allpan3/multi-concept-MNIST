@@ -27,7 +27,7 @@ def train(dataloader, model, loss_fn, optimizer, num_epoch, cur_time, device = "
     # targets in VSATensor([B, D])
     for epoch in range(num_epoch):
         if epoch != 0 and epoch % 5 == 0:
-            model_weight_loc = os.path.join(test_dir, f"model_weights_{MAX_NUM_OBJECTS}objs{'_single_count' if SINGLE_COUNT else ''}_{TRAIN_BATCH_SIZE}batch_{epoch}epoch_{NUM_TRAIN_SAMPLES}samples_{round(loss.item(),4)}loss_{cur_time}.pt")
+            model_weight_loc = os.path.join(test_dir, f"model_weights_{MAX_NUM_OBJECTS}objs{'_single_count' if SINGLE_COUNT else ''}_{TRAIN_BATCH_SIZE}batch_{NUM_TRAIN_SAMPLES}samples_{epoch}epoch_{round(loss.item(),4)}loss_{cur_time}.pt")
             torch.save(model.state_dict(), model_weight_loc)
             print(f"Model checkpoint saved to {model_weight_loc}")
 
@@ -90,7 +90,7 @@ def get_transform():
             transforms.ConvertImageDtype(torch.float32)  # Converts to [0, 1]
         ])
 
-def factorization_algo1(vsa, rn, inputs, init_estimates, count=None, codebooks=None, known=None):
+def factorization_algo1(vsa, rn, inputs, init_estimates, count=None, codebooks=None, known_factor=None):
 
     inputs = inputs.clone()
     init_estimates = init_estimates.clone()
@@ -126,7 +126,7 @@ def factorization_algo1(vsa, rn, inputs, init_estimates, count=None, codebooks=N
         #     init_estimates = vsa.apply_noise(init_estimates, 0.5)
 
         # Run resonator network
-        outcome, iter, converge = rn(inputs_, init_estimates, codebooks=codebooks, known=known)
+        outcome, iter, converge = rn(inputs_, init_estimates, codebooks=codebooks, known=known_factor)
 
         # Split batch results
         for i in range(len(outcome)):
@@ -150,13 +150,11 @@ def factorization_algo1(vsa, rn, inputs, init_estimates, count=None, codebooks=N
 
             debug_message += f"DEBUG: outcome = {outcome[i]}, sim_orig = {round(sim_orig.item()/DIM, 3)}, sim_remain = {round(sim_remain.item()/DIM, 3)}, energy_left = {round(vsa.energy(inputs[i]).item()/DIM,3)}, iter = {iter}, {converge}, {explained}\n"
 
-        # TODO The early terminate part can only be supported with batch size = 1. Need to enhance
-        assert TEST_BATCH_SIZE == 1, "Batch size != 1 is not yet supported"
         # If the final t trial all generate low similarity, likely no more vectors to be extracted and stop
         t = 3
         if (k >= t-1):
             try:
-                if ((torch.stack(sim_to_remain_all[0][-t:]) < int(vsa.dim * EARLY_TERM_THRESHOLD)).all()):
+                if ((torch.Tensor(sim_to_remain_all[:][-t:]) < int(vsa.dim * EARLY_TERM_THRESHOLD)).all()):
                     break
             except:
                 pass
@@ -166,8 +164,15 @@ def factorization_algo1(vsa, rn, inputs, init_estimates, count=None, codebooks=N
         if ((vsa.energy(inputs) <= int(vsa.dim * ENERGY_THRESHOLD)).all()):
             break
 
+        # This condition never triggers when the explain away threshold is high enough. Need further test to see whether it causes issue
+        # # When count is known, we should be able to break out of the loop slightly early
+        # # But allow some extra objects so that we can rank the results by similarity
+        # if count is not None:
+        #     if all([len(outcomes[i]) >= count + 2 for i in range(len(outcomes))]):
+        #         break
+
     # When the count is known, rank the results by similarity and pick the top k
-    if COUNT_KNOWN: 
+    if count is not None:
         # Among all qualified outcomes, select the n closest to the original input
         # Split batch results
         for i in range(len(inputs)):
@@ -207,6 +212,17 @@ def test_algo1(vsa, model, test_dl, device):
     NN needs to be trained with unquantized vectors
     """
 
+    if PROFILING:
+        prof = torch.profiler.profile(
+                    activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+                    schedule=torch.profiler.schedule(wait=0, warmup=1, active=PROFILING_SIZE, repeat=1, skip_first=1),
+                    on_trace_ready=torch.profiler.tensorboard_trace_handler('./profiler'),
+                    # record_shapes=True,
+                    # with_stack=True,
+                    # profile_memory=True
+                    )
+        prof.start()
+
     rn = Resonator(vsa, mode=VSA_MODE, type=RESONATOR_TYPE, activation=ACTIVATION, act_val=ACT_VALUE, iterations=NUM_ITERATIONS, stoch=STOCHASTICITY, randomness=RANDOMNESS, early_converge=EARLY_CONVERGE, seed=SEED, device=device)
 
     init_estimates = rn.get_init_estimates().unsqueeze(0).repeat(TEST_BATCH_SIZE,1,1)
@@ -218,10 +234,17 @@ def test_algo1(vsa, model, test_dl, device):
     min_sim = [[1,1] for _ in range(MAX_NUM_OBJECTS)]
     avg_sim = [[0,0] for _ in range(MAX_NUM_OBJECTS)]
     n = 0
-    for images, labels, targets, _ in tqdm(test_dl, desc="Test", leave=True if VERBOSE >= 1 else False):
-        images = get_transform()(images.to(device))
-        infer_result = model(images)
 
+
+    for images, labels, targets, _ in tqdm(test_dl, desc="Test", leave=True if VERBOSE >= 1 else False):
+        if PROFILING:
+            prof.step()   # all code between prof.start() and prof.step() are skipped
+
+        images = get_transform()(images.to(device))
+
+        with torch.profiler.record_function("inference"):
+            infer_result = model(images)
+        
         if QUANTIZE_MODEL:
             # infer_result = (infer_result/ 128.0 * MAX_NUM_OBJECTS).round().type(torch.int8)
             pass
@@ -229,10 +252,13 @@ def test_algo1(vsa, model, test_dl, device):
             # round() will round numbers near 0 to 0, which is not ideal when there's one object, since the vector should be bipolar (either 1 or -1)
             # But 0 is legitimate when there are even number of multiple objects.
             infer_result = infer_result.round().type(vsa.dtype)
+        if PROFILING:
+            continue
 
         # Factorization
         # TODO count currently assumes all tests in the batch have the same number of objects. Need to enhance
-        outcomes, convergences, iters, counts, debug_message = factorization_algo1(vsa, rn, infer_result, init_estimates, count=len(labels[0]))
+        outcomes, convergences, iters, counts, debug_message = factorization_algo1(vsa, rn, infer_result, init_estimates, count=len(labels[0]) if COUNT_KNOWN else None)
+
 
         # Compare results
         # Batch: multiple samples
@@ -300,6 +326,16 @@ def test_algo1(vsa, model, test_dl, device):
                     print(message[:-1])
                     print(debug_message[:-1])
             n += 1
+
+    if PROFILING:
+        prof.stop()
+        print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=40))
+        func = ["inference", "unbind", "similarity", "activation", "weighted_bundle"]
+        for avg in prof.key_averages():
+            for f in func:
+                if f in avg.key:
+                    print(f, avg)
+        exit
 
     for i in range(MAX_NUM_OBJECTS):
         avg_sim[i][0] = "N/A" if incorrect_count[i] == NUM_TEST_SAMPLES_PER_OBJ else round(avg_sim[i][0] / (NUM_TEST_SAMPLES_PER_OBJ - incorrect_count[i]), 3)
@@ -447,6 +483,7 @@ def reason_algo1(vsa, model, test_dl, device):
                     codebooks = [vsa.codebooks[i] for i in range(len(query)) if query[i] == None]
                     # Factorize the remaining vector
                     init_estimates = rn.get_init_estimates(codebooks)
+                    # TODO better to call factorization function with known count, which will call RN multiple times if the extracted object has low similarity
                     outcome, iter, converge = rn(input_q, init_estimates, codebooks=codebooks, known=query)
                     message += f"Convergence: {converge}\n"
 
@@ -474,7 +511,7 @@ def reason_algo1(vsa, model, test_dl, device):
                 # Factorize the remaining vector
                 init_estimates = rn.get_init_estimates(codebooks)
                 # Have to pass unquantized inputs to the factorizer to extract multiple objects
-                outcome, convergence, iters, count, debug_message = factorization_algo1(vsa, rn, infer_result[0], init_estimates, codebooks=codebooks, known=query)
+                outcome, convergence, iters, count, debug_message = factorization_algo1(vsa, rn, infer_result[0], init_estimates, codebooks=codebooks, known_factor=query)
 
                 answer = count
 
@@ -551,7 +588,7 @@ if __name__ == "__main__":
         cur_time_pst = datetime.now().astimezone(timezone('US/Pacific')).strftime("%m-%d-%H-%M")
         train_dl = get_train_data(test_dir, vsa, NUM_TRAIN_SAMPLES, MAX_NUM_OBJECTS, SINGLE_COUNT, TRAIN_BATCH_SIZE, NUM_POS_X, NUM_POS_Y, NUM_COLOR)
         final_loss = train(train_dl, model, loss_fn, optimizer, num_epoch=TRAIN_EPOCH, cur_time=cur_time_pst, device=device)
-        model_weight_loc = os.path.join(test_dir, f"model_weights_{MAX_NUM_OBJECTS}objs{'_single_count' if SINGLE_COUNT else ''}_{TRAIN_BATCH_SIZE}batch_{TRAIN_EPOCH}epoch_{NUM_TRAIN_SAMPLES}samples_{final_loss}loss_{cur_time_pst}.pt")
+        model_weight_loc = os.path.join(test_dir, f"model_weights_{MAX_NUM_OBJECTS}objs{'_single_count' if SINGLE_COUNT else ''}_{TRAIN_BATCH_SIZE}batch_{NUM_TRAIN_SAMPLES}samples_{TRAIN_EPOCH}epoch_{final_loss}loss_{cur_time_pst}.pt")
         torch.save(model.state_dict(), model_weight_loc)
         print(f"Model weights saved to {model_weight_loc}")
 

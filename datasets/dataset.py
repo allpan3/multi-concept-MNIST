@@ -37,7 +37,6 @@ class MultiConceptMNIST(VisionDataset):
         num_pos_x: int = 3,
         num_pos_y: int = 3,
         num_colors: int = 7,
-        device: str = "cpu",
         transform: Optional[Callable] = None,
         target_transform: Optional[Callable] = None
     ) -> None:
@@ -85,9 +84,9 @@ class MultiConceptMNIST(VisionDataset):
                 self.data, self.labels, self.targets, self.questions = self.dataset_gen(type, raw_ds, max_num_objects, num_samples)
             else:
                 print(f"{type} {max_num_objects} obj {num_samples} dataset exists, loading...")
-                self.data = torch.load(os.path.join(self.root, f"{type}-images-{max_num_objects}obj-{num_samples}samples.pt"), map_location=device)
-                self.labels = torch.load(os.path.join(self.root, f"{type}-labels-{max_num_objects}obj-{num_samples}samples.pt"), map_location=device)
-                self.targets = torch.load(os.path.join(self.root, f"{type}-targets-{max_num_objects}obj-{num_samples}samples.pt"), map_location=device)
+                self.data = torch.load(os.path.join(self.root, f"{type}-images-{max_num_objects}obj-{num_samples}samples.pt"))
+                self.labels = torch.load(os.path.join(self.root, f"{type}-labels-{max_num_objects}obj-{num_samples}samples.pt"))
+                self.targets = torch.load(os.path.join(self.root, f"{type}-targets-{max_num_objects}obj-{num_samples}samples.pt"))
                 if not train:
                     self.questions = self._load_json(os.path.join(self.root, f"{type}-questions-{max_num_objects}obj-{num_samples}samples.json"))
         else:
@@ -103,9 +102,9 @@ class MultiConceptMNIST(VisionDataset):
                     self.questions += questions
                 else:
                     print(f"{type} {n} obj {num_samples[i]} dataset exists, loading...")
-                    self.data += torch.load(os.path.join(self.root, f"{type}-images-{n}obj-{num_samples[i]}samples.pt"), map_location=device)
-                    self.labels += torch.load(os.path.join(self.root, f"{type}-labels-{n}obj-{num_samples[i]}samples.pt"), map_location=device)
-                    self.targets += torch.load(os.path.join(self.root, f"{type}-targets-{n}obj-{num_samples[i]}samples.pt"), map_location=device)
+                    self.data += torch.load(os.path.join(self.root, f"{type}-images-{n}obj-{num_samples[i]}samples.pt"))
+                    self.labels += torch.load(os.path.join(self.root, f"{type}-labels-{n}obj-{num_samples[i]}samples.pt"))
+                    self.targets += torch.load(os.path.join(self.root, f"{type}-targets-{n}obj-{num_samples[i]}samples.pt"))
                     if not train:
                         self.questions += self._load_json(os.path.join(self.root, f"{type}-questions-{n}obj-{num_samples[i]}samples.json"))
         
@@ -208,10 +207,11 @@ class MultiConceptMNIST(VisionDataset):
         if type(label_set) == str:
             with open(label_set, "r") as f:
                 label_set = json.load(f)
-        
+ 
         target_set = []
+        # The dataset is always stored in CPU and moved to GPU batch-by-batch
         for label in tqdm(label_set, desc=f"Generating targets for {len(label_set[0])}-object images", leave=False):
-            target_set.append(self.vsa.lookup(label)) # Use this instead of get_vector cuz whether to quantize is determined by the algorithm
+            target_set.append(self.vsa.lookup(label, device="cpu")) # Use this instead of get_vector cuz whether to quantize is determined by the algorithm
         return target_set
 
     QUESTION_SET = [

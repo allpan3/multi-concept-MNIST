@@ -3,7 +3,7 @@ from vsa import VSA
 import itertools
 import torch
 
-def get_vsa(dir, mode, algo, codebooks, dim, max_num_objects, num_colors=7, num_pos_x=3, num_pos_y=3, fold_dim=256, ehd_bits=9, sim_bits=13, seed=None, device=None):
+def get_vsa(dir, mode, algo, codebooks=None, dim=2048, max_num_objects=3, num_colors=7, num_pos_x=3, num_pos_y=3, fold_dim=256, ehd_bits=9, sim_bits=13, seed=None, device=None):
     if algo == "algo1":
         vsa = MultiConceptMNISTVSA1(dir, mode=mode, codebooks=codebooks, dim=dim, max_num_objects=max_num_objects, num_colors=num_colors, num_pos_x=num_pos_x, num_pos_y=num_pos_y, fold_dim=fold_dim, ehd_bits=ehd_bits, sim_bits=sim_bits, seed=seed, device=device)
     elif algo == "algo2":
@@ -34,8 +34,8 @@ class MultiConceptMNISTVSA1(VSA):
         self.num_pos_y = num_pos_y
         self.num_colors = num_colors
 
-    def lookup(self, label: list):
-        return self.get_vector(label, quantize=False)
+    def lookup(self, label: list, device = None):
+        return self.get_vector(label, quantize=False, device=device)
 
 
 class MultiConceptMNISTVSA2(VSA):
@@ -70,7 +70,7 @@ class MultiConceptMNISTVSA2(VSA):
         # Construct priority list for sorting based on (x, y) locations
         self.rule = [x for x in itertools.product(range(len(self.x_codebook)), range(len(self.y_codebook)))]
 
-    def lookup(self, label: list, bundled: bool = True):
+    def lookup(self, label: list, bundled: bool = True, device = None):
         '''
         `label` doesn't include ID
         We reorder the label list based on the (x, y) locations of the objects in the scene, then bind the corresponding
@@ -91,5 +91,5 @@ class MultiConceptMNISTVSA2(VSA):
         if bundled:
             objects = self.multiset(torch.stack(objects))
 
-        return objects
+        return objects.to(device)
 
