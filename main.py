@@ -216,7 +216,7 @@ def test_algo1(vsa, model, test_dl, device):
         prof = torch.profiler.profile(
                     activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
                     schedule=torch.profiler.schedule(wait=0, warmup=1, active=PROFILING_SIZE, repeat=1, skip_first=1),
-                    on_trace_ready=torch.profiler.tensorboard_trace_handler('./profiler'),
+                    # on_trace_ready=torch.profiler.tensorboard_trace_handler('./profiler'),
                     # record_shapes=True,
                     # with_stack=True,
                     # profile_memory=True
